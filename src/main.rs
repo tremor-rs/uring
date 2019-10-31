@@ -1,0 +1,718 @@
+pub mod errors;
+mod raft_node;
+mod storage;
+use actix::io::SinkWrite;
+use actix::prelude::*;
+use actix_codec::Framed;
+use actix_web::{
+    http::StatusCode, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer,
+};
+use actix_web_actors::ws;
+use awc::{
+    error::WsProtocolError,
+    ws::{CloseCode, CloseReason, Codec as AxCodec, Frame, Message},
+    BoxedSocket, Client,
+};
+use clap::{App as ClApp, Arg};
+use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use futures::{
+    lazy,
+    stream::{SplitSink, Stream},
+    Future,
+};
+use protobuf::Message as PBMessage;
+use raft::eraftpb::{Message as RaftMessage, MessageType};
+use raft::{prelude::*, StateRole};
+use raft_node::*;
+use serde::{Deserialize, Serialize};
+use slog::Drain;
+use slog::Logger;
+use std::collections::HashMap;
+use std::thread;
+use std::time::{Duration, Instant};
+
+#[macro_use]
+extern crate slog;
+
+/// How often heartbeat pings are sent
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+/// How long before lack of client response causes a timeout
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+macro_rules! eat_error {
+    ($e:expr) => {
+        if let Err(e) = $e {
+            println!("[WS Offramp] {}", e)
+        }
+    };
+}
+
+/// do websocket handshake and start `UrSocket` actor
+fn uring_index(
+    r: HttpRequest,
+    stream: web::Payload,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, Error> {
+    let res = ws::start(UrSocket::new(srv.get_ref().clone()), &r, stream);
+    res
+}
+
+struct GetReq(String, Sender<String>);
+
+#[derive(Deserialize)]
+pub struct GetParams {
+    id: String,
+}
+/// do websocket handshake and start `UrSocket` actor
+fn get(
+    r: HttpRequest,
+    params: web::Path<GetParams>,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, Error> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref().tx.send(UrMsg::Get(params.id.clone(), tx));
+    let res = rx.recv().unwrap();
+    Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()).set_body(res.into()))
+}
+
+/// do websocket handshake and start `UrSocket` actor
+fn post(
+    r: HttpRequest,
+    params: web::Path<GetParams>,
+    body: web::Payload,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, Error> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref()
+        .tx
+        .send(UrMsg::Put(params.id.clone(), params.id.clone(), tx));
+    if rx.recv().unwrap() {
+        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
+/// websocket connection is long running connection, it easier
+/// to handle with an actor
+pub struct UrSocket {
+    /// Client must send ping at least once per 10 seconds (CLIENT_TIMEOUT),
+    /// otherwise we drop connection.
+    hb: Instant,
+    node: Node,
+    remote_id: u64,
+}
+
+impl Actor for UrSocket {
+    type Context = ws::WebsocketContext<Self>;
+
+    /// Method is called on actor start. We start the heartbeat process here.
+    fn started(&mut self, ctx: &mut Self::Context) {
+        self.hb(ctx);
+    }
+
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
+        self.node
+            .tx
+            .send(UrMsg::DownRemote(self.remote_id))
+            .unwrap();
+    }
+}
+
+/// Handler for `ws::Message`
+impl StreamHandler<ws::Message, ws::ProtocolError> for UrSocket {
+    fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
+        // process websocket messages
+        match msg {
+            ws::Message::Ping(msg) => {
+                self.hb = Instant::now();
+                ctx.pong(&msg);
+            }
+            ws::Message::Pong(_) => {
+                self.hb = Instant::now();
+            }
+            ws::Message::Text(text) => {
+                let msg: HandshakeMsg = serde_json::from_str(&text).unwrap();
+                match msg {
+                    HandshakeMsg::Hello(id, peer) => {
+                        self.remote_id = id;
+                        self.node
+                            .tx
+                            .send(UrMsg::RegisterRemote(id, peer, ctx.address()))
+                            .unwrap();
+                    }
+                    HandshakeMsg::AckProposal(pid, success) => {
+                        self.node.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
+                    }
+                    HandshakeMsg::ForwardProposal(from, pid, key, value) => {
+                        self.node
+                            .tx
+                            .send(UrMsg::ForwardProposal(from, pid, key, value))
+                            .unwrap();
+                    }
+                    _ => (),
+                }
+
+                //ctx.text(text)
+            }
+            ws::Message::Binary(bin) => {
+                let mut msg = RaftMessage::default();
+                msg.merge_from_bytes(&bin).unwrap();
+                //println!("recived raft message {:?}", msg);
+                self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
+            }
+            ws::Message::Close(_) => {
+                ctx.stop();
+            }
+            ws::Message::Nop => (),
+        }
+    }
+}
+
+/// Handle stdin commands
+impl Handler<WsMessage> for UrSocket {
+    type Result = ();
+
+    fn handle(&mut self, msg: WsMessage, ctx: &mut Self::Context) {
+        match msg {
+            WsMessage::Msg(data) => ctx.text(serde_json::to_string(&data).unwrap()),
+        }
+    }
+}
+
+/// Handle stdin commands
+impl Handler<RaftMsg> for UrSocket {
+    type Result = ();
+    fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
+        //println!("Sending Raft message to (incoming): {:?}", msg.0);
+        let data = msg.0.write_to_bytes().unwrap();
+        ctx.binary(data);
+    }
+}
+
+impl UrSocket {
+    fn new(node: Node) -> Self {
+        Self {
+            hb: Instant::now(),
+            node,
+            remote_id: 0,
+        }
+    }
+
+    /// helper method that sends ping to client every second.
+    ///
+    /// also this method checks heartbeats from client
+    fn hb(&self, ctx: &mut <Self as Actor>::Context) {
+        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
+            // check client heartbeats
+            if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
+                // heartbeat timed out
+                println!("Websocket Client heartbeat failed, disconnecting!");
+
+                // stop actor
+                ctx.stop();
+
+                // don't try to send a ping
+                return;
+            }
+
+            ctx.ping("");
+        });
+    }
+}
+
+#[derive(Clone)]
+struct Node {
+    id: u64,
+    tx: Sender<UrMsg>,
+}
+
+fn remote_endpoint(_id: u64, endpoint: String, master: Sender<UrMsg>) -> std::io::Result<()> {
+    loop {
+        let sys = actix::System::new("ws-example");
+        let endpoint1 = endpoint.clone();
+        let master1 = master.clone();
+        Arbiter::spawn(lazy(move || {
+            Client::new()
+                .ws(&format!("ws://{}/uring", endpoint1))
+                .connect()
+                .map_err(|e| {
+                    println!("Error: {}", e);
+                    ()
+                })
+                .map(move |(_response, framed)| {
+                    let (sink, stream) = framed.split();
+                    let master2 = master1.clone();
+                    let addr = WsOfframpWorker::create(move |ctx| {
+                        WsOfframpWorker::add_stream(stream, ctx);
+                        WsOfframpWorker {
+                            //                            my_id: id,
+                            remote_id: 0,
+                            tx: master2,
+                            sink: SinkWrite::new(sink, ctx),
+                        }
+                    });
+                    master1.send(UrMsg::InitLocal(addr)).unwrap();
+                    ()
+                })
+        }));
+        sys.run().unwrap();
+        //        dbg!(r);
+    }
+}
+
+pub struct WsOfframpWorker {
+    //    my_id: u64,
+    remote_id: u64,
+    tx: Sender<UrMsg>,
+    sink: SinkWrite<SplitSink<Framed<BoxedSocket, AxCodec>>>,
+}
+
+impl WsOfframpWorker {
+    fn hb(&self, ctx: &mut Context<Self>) {
+        ctx.run_later(HEARTBEAT_INTERVAL, |act, ctx| {
+            eat_error!(act.sink.write(Message::Ping(String::from("Yay tremor!"))));
+            act.hb(ctx);
+        });
+    }
+}
+impl actix::io::WriteHandler<WsProtocolError> for WsOfframpWorker {}
+
+impl Actor for WsOfframpWorker {
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Context<Self>) {
+        self.hb(ctx)
+    }
+
+    fn stopped(&mut self, _: &mut Context<Self>) {
+        eat_error!(self.tx.send(UrMsg::DownLocal(self.remote_id)));
+        println!("system stopped");
+        System::current().stop();
+    }
+}
+
+#[derive(Message)]
+pub enum WsMessage {
+    Msg(HandshakeMsg),
+}
+
+/// Handle stdin commands
+impl Handler<WsMessage> for WsOfframpWorker {
+    type Result = ();
+
+    fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self>) {
+        match msg {
+            WsMessage::Msg(data) => eat_error!(self
+                .sink
+                .write(Message::Text(serde_json::to_string(&data).unwrap()))),
+        }
+    }
+}
+
+#[derive(Message)]
+pub(crate) struct RaftMsg(RaftMessage);
+/// Handle stdin commands
+impl Handler<RaftMsg> for WsOfframpWorker {
+    type Result = ();
+
+    fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
+        //println!("Sending Raft message to (outgoing): {:?}", msg.0);
+        let data = msg.0.write_to_bytes().unwrap();
+        self.sink.write(Message::Binary(data.into())).unwrap();
+    }
+}
+
+/// Handle server websocket messages
+impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
+    fn handle(&mut self, msg: Frame, ctx: &mut Context<Self>) {
+        match msg {
+            Frame::Close(_) => {
+                eat_error!(self.sink.write(Message::Close(None)));
+            }
+            Frame::Ping(data) => {
+                eat_error!(self.sink.write(Message::Pong(data)));
+            }
+            Frame::Text(Some(data)) => {
+                let msg: HandshakeMsg = serde_json::from_slice(&data).unwrap();
+                match msg {
+                    HandshakeMsg::Welcome(id, peer, peers) => {
+                        self.remote_id = id;
+                        self.tx
+                            .send(UrMsg::RegisterLocal(id, peer, ctx.address(), peers))
+                            .unwrap();
+                    }
+                    HandshakeMsg::AckProposal(pid, success) => {
+                        self.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
+                    }
+                    _ => (),
+                }
+            }
+            Frame::Text(None) => {
+                eat_error!(self.sink.write(Message::Text(String::new())));
+            }
+            Frame::Binary(Some(bin)) => {
+                let mut msg = RaftMessage::default();
+                msg.merge_from_bytes(&bin).unwrap();
+                //println!("recived raft message {:?}", msg);
+                self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
+            }
+            Frame::Binary(None) => {
+                //eat_error!(self.2.write(Message::Binary(Bytes::new())));
+                ()
+            }
+            Frame::Pong(_) => (),
+        }
+    }
+
+    fn error(&mut self, error: WsProtocolError, _ctx: &mut Context<Self>) -> Running {
+        match error {
+            _ => eat_error!(self.sink.write(Message::Close(Some(CloseReason {
+                code: CloseCode::Protocol,
+                description: None,
+            })))),
+        };
+        // Reconnect
+        Running::Continue
+    }
+
+    fn started(&mut self, _ctx: &mut Context<Self>) {
+        println!("[WS Onramp] Connection established.");
+    }
+
+    fn finished(&mut self, ctx: &mut Context<Self>) {
+        println!("[WS Onramp] Connection terminated.");
+        eat_error!(self.sink.write(Message::Close(None)));
+        ctx.stop()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum HandshakeMsg {
+    Hello(u64, String),
+    Welcome(u64, String, Vec<(u64, String)>),
+    AckProposal(u64, bool),
+    ForwardProposal(u64, u64, String, String),
+}
+
+pub enum UrMsg {
+    InitLocal(Addr<WsOfframpWorker>),
+    RegisterLocal(u64, String, Addr<WsOfframpWorker>, Vec<(u64, String)>),
+    RegisterRemote(u64, String, Addr<UrSocket>),
+    DownLocal(u64),
+    DownRemote(u64),
+    AckProposal(u64, bool),
+    ForwardProposal(u64, u64, String, String),
+    RaftMsg(RaftMessage),
+    Get(String, Sender<String>),
+    Put(String, String, Sender<bool>),
+}
+
+fn loopy_thing(
+    id: u64,
+    my_endpoint: String,
+    bootstrap: bool,
+    rx: Receiver<UrMsg>,
+    tx: Sender<UrMsg>,
+    logger: Logger,
+) {
+    // Tick the raft node per 100ms. So use an `Instant` to trace it.
+    let mut t = Instant::now();
+    let mut t1 = Instant::now();
+    let mut last_state = StateRole::PreCandidate;
+    let mut node = if bootstrap {
+        RaftNode::create_raft_leader(id, my_endpoint, rx.clone(), &logger)
+    } else {
+        RaftNode::create_raft_follower(id, my_endpoint, rx.clone(), &logger)
+    };
+    node.log(&logger);
+
+    let mut known_peers: HashMap<u64, String> = HashMap::new();
+    loop {
+        thread::sleep(Duration::from_millis(10));
+        loop {
+            match rx.try_recv() {
+                Ok(UrMsg::Get(key, reply)) => {
+                    reply.send(node.get_key(key));
+                }
+                Ok(UrMsg::Put(key, value, reply)) => {
+                    let pid = node.proposal_id;
+                    node.proposal_id += 1;
+                    let from = node.id;
+                    if node.is_leader() {
+                        node.pending_acks.insert(pid, reply.clone());
+                        node.proposals
+                            .push_back(Proposal::normal(from, pid, key, value));
+                    } else {
+                        let leader = node.leader();
+                        let msg =
+                            WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
+                        if let Some(remote) = node.local_mailboxes.get(&leader) {
+                            node.pending_acks.insert(pid, reply.clone());
+                            remote.send(msg).wait();
+                        } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
+                            node.pending_acks.insert(pid, reply.clone());
+                            remote.send(msg).wait();
+                        } else {
+                            error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()));
+                            reply.send(false);
+                        }
+                    }
+                }
+                Ok(UrMsg::AckProposal(pid, success)) => {
+                    info!(&logger, "proposal acknowledged"; "pid" => pid);
+                    if let Some(proposal) = node.pending_proposals.remove(&pid) {
+                        if !success {
+                            node.proposals.push_back(proposal)
+                        }
+                    }
+                    if let Some(reply) = node.pending_acks.remove(&pid) {
+                        reply.send(success);
+                    }
+                }
+                Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
+                    if node.is_leader() {
+                        node.proposals
+                            .push_back(Proposal::normal(from, pid, key, value));
+                    } else {
+                        let leader = node.leader();
+                        let msg =
+                            WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
+                        if let Some(remote) = node.local_mailboxes.get(&leader) {
+                            remote.send(msg).wait();
+                        } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
+                            remote.send(msg).wait();
+                        } else {
+                            error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()))
+                        }
+                    }
+                }
+                // Connection handling of websocket connections
+                // partially based on the problem that actix ws client
+                // doens't reconnect
+                Ok(UrMsg::InitLocal(endpoint)) => {
+                    info!(&logger, "Initializing local endpoint");
+                    endpoint
+                        .send(WsMessage::Msg(HandshakeMsg::Hello(
+                            node.id,
+                            node.endpoint.clone(),
+                        )))
+                        .wait()
+                        .unwrap();
+                }
+                Ok(UrMsg::RegisterLocal(id, peer, endpoint, peers)) => {
+                    if id != node.id {
+                        info!(&logger, "register(local)"; "remote-id" => id, "remote-peer" => peer, "discovered-peers" => format!("{:?}", peers));
+                        node.local_mailboxes.insert(id, endpoint.clone());
+                        for (peer_id, peer) in peers {
+                            if !known_peers.contains_key(&peer_id) {
+                                known_peers.insert(peer_id, peer.clone());
+                                let tx = tx.clone();
+                                let node_id = node.id;
+                                thread::spawn(move || remote_endpoint(node_id, peer, tx));
+                            }
+                        }
+                    }
+                }
+
+                // Reply to hello => sends RegisterLocal
+                Ok(UrMsg::RegisterRemote(id, peer, endpoint)) => {
+                    if id != node.id {
+                        if !known_peers.contains_key(&id) {
+                            known_peers.insert(id, peer.clone());
+                            //let tx = tx.clone();
+                            //let node_id = node.id;
+                            //thread::spawn(move || remote_endpoint(node_id, peer, tx));
+                        }
+                        let g = node.raft_group.as_ref().unwrap();
+                        info!(&logger, "register(remote)"; "remote-id" => id, "remote-peer" => peer);
+                        endpoint
+                            .clone()
+                            .send(WsMessage::Msg(HandshakeMsg::Welcome(
+                                node.id,
+                                node.endpoint.clone(),
+                                known_peers
+                                    .clone()
+                                    .into_iter()
+                                    .collect::<Vec<(u64, String)>>(),
+                            )))
+                            .wait()
+                            .unwrap();
+                        node.remote_mailboxes.insert(id, endpoint.clone());
+
+                        if !g.raft.prs().configuration().contains(id) {
+                            info!(&logger, "ADDING NODE"; "id" => id);
+                            let mut conf_change = ConfChange::default();
+                            conf_change.node_id = id;
+                            conf_change.set_change_type(ConfChangeType::AddNode);
+                            let proposal =
+                                Proposal::conf_change(node.proposal_id, node.id, &conf_change);
+                            node.proposal_id += 1;
+
+                            // FIXME might not be the leader
+                            node.proposals.push_back(proposal);
+                            // This is the first node added so we introduce a AddNode for the bootstrap node
+                            if g.raft.prs().configuration().voters().len()
+                                + g.raft.prs().configuration().learners().len()
+                                == 1
+                                && bootstrap
+                            {
+                                info!(&logger, "ADDING NODE(SELF)"; "id" => node.id);
+                                let mut conf_change = ConfChange::default();
+                                conf_change.node_id = node.id;
+                                conf_change.set_change_type(ConfChangeType::AddNode);
+                                let proposal =
+                                    Proposal::conf_change(node.proposal_id, node.id, &conf_change);
+                                node.proposal_id += 1;
+                                node.proposals.push_back(proposal);
+                            }
+                        }
+                    }
+                    // TODO: How to check if it was accepted
+                }
+                Ok(UrMsg::DownLocal(id)) => {
+                    warn!(&logger, "down(local)"; "id" => id);
+                    node.local_mailboxes.remove(&id);
+                    if !node.remote_mailboxes.contains_key(&id) {
+                        known_peers.remove(&id);
+                    }
+                }
+                Ok(UrMsg::DownRemote(id)) => {
+                    warn!(&logger, "down(remote)"; "id" => id);
+                    node.remote_mailboxes.remove(&id);
+                    if !node.local_mailboxes.contains_key(&id) {
+                        known_peers.remove(&id);
+                    }
+                }
+
+                // RAFT
+                Ok(UrMsg::RaftMsg(msg)) => {
+                    //node.is_leader() ||
+                    // if msg.get_msg_type() != MessageType::MsgHeartbeat
+                    //     && msg.get_msg_type() != MessageType::MsgHeartbeatResponse
+                    // {
+                    //println!("step: {:?}", msg);
+                    // }
+                    if let Err(e) = node.step(msg) {
+                        error!(&logger, "step error"; "error" => format!("{}", e));
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return,
+            }
+        }
+        if !node.is_running() {
+            continue;
+        }
+
+        if t.elapsed() >= Duration::from_millis(100) {
+            // Tick the raft.
+
+            node.raft_group.as_mut().unwrap().tick();
+            t = Instant::now();
+        }
+
+        let this_state = node.raft_group.as_ref().unwrap().raft.state.clone();
+
+        if t1.elapsed() >= Duration::from_secs(10) {
+            // Tick the raft.
+            node.log(&logger);
+            t1 = Instant::now();
+        }
+
+        // Let the leader pick pending proposals from the global queue.
+        if node.is_leader() {
+            // Handle new proposals.
+            node.propose_all().unwrap();
+        }
+
+        if this_state != last_state {
+            debug!(&logger, "State transition"; "last-state" => format!("{:?}", last_state), "next-state" => format!("{:?}", this_state));
+            last_state = this_state
+        }
+
+        // Handle readies from the raft.
+        node.on_ready();
+
+        // Check control signals from
+        //        if check_signals(&rx_stop_clone) {
+        //           return;
+        //        };
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    env_logger::init();
+    let decorator = slog_term::TermDecorator::new().build();
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain).build().fuse();
+
+    let logger = slog::Logger::root(drain, o!());
+
+    //std::env::set_var("RUST_LOG", "actix_server=info,actix_web=info");
+    let matches = ClApp::new("cake")
+        .version("1.0")
+        .author("The Treamor Team")
+        .about("Uring Demo")
+        .arg(
+            Arg::with_name("id")
+                .short("i")
+                .long("id")
+                .value_name("ID")
+                .help("The Node ID")
+                .default_value("uring01")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("peers")
+                .short("p")
+                .long("peers")
+                .value_name("PEERS")
+                .multiple(true)
+                .takes_value(true)
+                .help("Peers to connet to"),
+        )
+        .arg(
+            Arg::with_name("endpoint")
+                .short("e")
+                .long("endpoint")
+                .value_name("ENDPOINT")
+                .takes_value(true)
+                .default_value("127.0.0.1:8080")
+                .help("Peers to connet to"),
+        )
+        .get_matches();
+
+    let peers = matches.values_of_lossy("peers").unwrap_or(vec![]);
+    let (tx, rx) = bounded(100);
+    let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
+    let id: u64 = matches.value_of("id").unwrap_or("1").parse().unwrap();
+    let leader = peers.is_empty();
+    let my_endpoint = endpoint.to_string();
+    let tx1 = tx.clone();
+    thread::spawn(move || loopy_thing(id, my_endpoint, leader, rx, tx1, logger));
+
+    for peer in peers {
+        let tx = tx.clone();
+        thread::spawn(move || remote_endpoint(id, peer, tx));
+    }
+
+    let node = Node { tx, id };
+
+    HttpServer::new(move || {
+        App::new()
+            .data(node.clone())
+            // enable logger
+            .wrap(middleware::Logger::default())
+            .service(
+                web::resource("/data/{id}")
+                    .route(web::get().to(get))
+                    .route(web::post().to(post)),
+            )
+            // websocket route
+            .service(web::resource("/uring").route(web::get().to(uring_index)))
+    })
+    // start http server on 127.0.0.1:8080
+    .bind(endpoint)?
+    .run()
+}
