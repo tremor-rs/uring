@@ -1,3 +1,17 @@
+// Copyright 2018-2019, Wayfair GmbH
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 pub mod errors;
 mod raft_node;
 mod storage;
@@ -21,7 +35,7 @@ use futures::{
     Future,
 };
 use protobuf::Message as PBMessage;
-use raft::eraftpb::{Message as RaftMessage, MessageType};
+use raft::eraftpb::{Message as RaftMessage};
 use raft::{prelude::*, StateRole};
 use raft_node::*;
 use serde::{Deserialize, Serialize};
@@ -65,7 +79,7 @@ pub struct GetParams {
 }
 /// do websocket handshake and start `UrSocket` actor
 fn get(
-    r: HttpRequest,
+    _r: HttpRequest,
     params: web::Path<GetParams>,
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
@@ -77,9 +91,9 @@ fn get(
 
 /// do websocket handshake and start `UrSocket` actor
 fn post(
-    r: HttpRequest,
+    _r: HttpRequest,
     params: web::Path<GetParams>,
-    body: web::Payload,
+    _body: web::Payload,
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
