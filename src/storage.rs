@@ -125,11 +125,13 @@ pub struct URRocksStorage {
     backend: DB,
     pending_conf_state: Option<ConfState>,
     pending_conf_state_start_index: Option<u64>,
+    conf_state: Option<ConfState>,
 }
 
 impl URRocksStorage {
     pub fn new_with_conf_state(id: u64, state: ConfState) -> Self {
         let mut db = Self::new(id);
+
         db.set_conf_state(state, None).unwrap();
         db.set_hard_state(1, 1).unwrap();
         db
@@ -139,6 +141,7 @@ impl URRocksStorage {
             backend: DB::open_default(&format!("raft-rocks-{}", id)).unwrap(),
             pending_conf_state: None,
             pending_conf_state_start_index: None,
+            conf_state: None,
         }
     }
 
@@ -205,6 +208,8 @@ impl WriteStorage for URRocksStorage {
         cs: ConfState,
         pending_membership_change: Option<(ConfState, u64)>,
     ) -> RaftResult<()> {
+        self.conf_state = Some(cs.clone());
+
         let data = cs.write_to_bytes()?;
         self.backend.put(&CONF_STATE, &data).unwrap();
         self.backend.flush().unwrap();
@@ -229,7 +234,15 @@ impl WriteStorage for URRocksStorage {
 impl ReadStorage for URRocksStorage {
     fn initial_state(&self) -> RaftResult<RaftState> {
         let mut initial_state = RaftState::default();
-        initial_state.conf_state = self.get_conf_state();
+        if let Some(ref cs) = self.conf_state {
+            initial_state.conf_state = cs.clone()
+        }
+        // initial_state.conf_state = self.get_conf_state();
+
+        //let mut cs = self.get_conf_state();
+        //initial_state.conf_state.set_nodes(cs.take_nodes());
+        //initial_state.conf_state.set_learners(cs.take_learners());
+
         initial_state.hard_state = self.get_hard_state();
         Ok(initial_state)
     }

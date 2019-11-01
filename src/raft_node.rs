@@ -403,7 +403,7 @@ impl RaftNode {
         Ok(())
     }
     fn send_msg(&self, msg: Message) -> Result<()> {
-        println!("sending raft message {:?}", msg);
+        //println!("sending raft message {:?}", msg);
         if let Some(remote) = self.local_mailboxes.get(&msg.to) {
             remote
                 .send(RaftMsg(msg))

@@ -56,7 +56,7 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 macro_rules! eat_error {
     ($e:expr) => {
         if let Err(e) = $e {
-            println!("[WS Offramp] {}", e)
+            println!("[WS Error] {}", e)
         }
     };
 }
@@ -285,7 +285,7 @@ pub struct WsOfframpWorker {
 impl WsOfframpWorker {
     fn hb(&self, ctx: &mut Context<Self>) {
         ctx.run_later(HEARTBEAT_INTERVAL, |act, ctx| {
-            eat_error!(act.sink.write(Message::Ping(String::from("Yay tremor!"))));
+            act.sink.write(Message::Ping(String::from("Yay tremor!")));
             act.hb(ctx);
         });
     }
@@ -300,7 +300,7 @@ impl Actor for WsOfframpWorker {
     }
 
     fn stopped(&mut self, _: &mut Context<Self>) {
-        eat_error!(self.tx.send(UrMsg::DownLocal(self.remote_id)));
+        self.tx.send(UrMsg::DownLocal(self.remote_id));
         println!("system stopped");
         System::current().stop();
     }
