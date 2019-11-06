@@ -35,7 +35,7 @@ use futures::{
     Future,
 };
 use protobuf::Message as PBMessage;
-use raft::eraftpb::{Message as RaftMessage};
+use raft::eraftpb::Message as RaftMessage;
 use raft::{prelude::*, StateRole};
 use raft_node::*;
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,39 @@ fn post(
     srv.get_ref()
         .tx
         .send(UrMsg::Put(params.id.clone(), params.id.clone(), tx));
+    if rx.recv().unwrap() {
+        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GetNodeParams {
+    id: u64,
+}
+fn get_node(
+    _r: HttpRequest,
+    params: web::Path<GetNodeParams>,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, Error> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref().tx.send(UrMsg::GetNode(params.id, tx));
+    if rx.recv().unwrap() {
+        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
+    }
+}
+
+fn post_node(
+    _r: HttpRequest,
+    params: web::Path<GetNodeParams>,
+    _body: web::Payload,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, Error> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref().tx.send(UrMsg::PutNode(params.id, tx));
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -420,6 +453,8 @@ pub enum UrMsg {
     RaftMsg(RaftMessage),
     Get(String, Sender<String>),
     Put(String, String, Sender<bool>),
+    GetNode(u64, Sender<bool>),
+    PutNode(u64, Sender<bool>),
 }
 
 fn loopy_thing(
@@ -446,6 +481,27 @@ fn loopy_thing(
         thread::sleep(Duration::from_millis(10));
         loop {
             match rx.try_recv() {
+                Ok(UrMsg::GetNode(id, reply)) => {
+                    let g = node.raft_group.as_ref().unwrap();
+                    reply.send(g.raft.prs().configuration().contains(id));
+                }
+                Ok(UrMsg::PutNode(id, reply)) => {
+                    let g = node.raft_group.as_ref().unwrap();
+                    if node.is_leader() && !g.raft.prs().configuration().contains(id) {
+                        let mut conf_change = ConfChange::default();
+                        conf_change.node_id = id;
+                        conf_change.set_change_type(ConfChangeType::AddNode);
+                        let proposal =
+                            Proposal::conf_change(node.proposal_id, node.id, &conf_change);
+                        node.proposal_id += 1;
+
+                        // FIXME might not be the leader
+                        node.proposals.push_back(proposal);
+                        reply.send(true);
+                    } else {
+                        reply.send(false);
+                    }
+                }
                 Ok(UrMsg::Get(key, reply)) => {
                     reply.send(node.get_key(key));
                 }
@@ -553,7 +609,7 @@ fn loopy_thing(
                             .wait()
                             .unwrap();
                         node.remote_mailboxes.insert(id, endpoint.clone());
-
+                        /*
                         if !g.raft.prs().configuration().contains(id) {
                             info!(&logger, "ADDING NODE"; "id" => id);
                             let mut conf_change = ConfChange::default();
@@ -581,6 +637,7 @@ fn loopy_thing(
                                 node.proposals.push_back(proposal);
                             }
                         }
+                        */
                     }
                     // TODO: How to check if it was accepted
                 }
@@ -722,6 +779,11 @@ fn main() -> std::io::Result<()> {
                 web::resource("/data/{id}")
                     .route(web::get().to(get))
                     .route(web::post().to(post)),
+            )
+            .service(
+                web::resource("/node/{id}")
+                    .route(web::get().to(get_node))
+                    .route(web::post().to(post_node)),
             )
             // websocket route
             .service(web::resource("/uring").route(web::get().to(uring_index)))
