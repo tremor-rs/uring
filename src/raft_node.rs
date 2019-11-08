@@ -24,6 +24,7 @@ use regex::Regex;
 use slog::Logger;
 use std::collections::VecDeque;
 use std::fmt;
+use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 
 //type UsedStorage = URMemStorage;
 type UsedStorage = URRocksStorage;
@@ -380,11 +381,7 @@ impl RaftNode {
     }
 
     pub(crate) fn propose_all(&mut self) -> Result<()> {
-        let raft_group = match self.raft_group {
-            Some(ref mut r) => r,
-            // When Node::raft_group is `None` it means the node is not initialized.
-            _ => return Err(Error::ViolatesContract("raft_group is None".into())),
-        };
+        let raft_group = self.raft_group.as_mut().unwrap();
         let mut pending = Vec::new();
         for p in self.proposals.iter_mut().skip_while(|p| p.proposed > 0) {
             if propose_and_check_failed_proposal(raft_group, p)? {
@@ -408,12 +405,12 @@ impl RaftNode {
             remote
                 .send(RaftMsg(msg))
                 .wait()
-                .map_err(|e| Error::ViolatesContract(format!("failed to send: {}", e)))
+                .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get(&msg.to) {
             remote
                 .send(RaftMsg(msg))
                 .wait()
-                .map_err(|e| Error::ViolatesContract(format!("failed to send: {}", e)))
+                .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
         } else {
             println!("send raft message to {} fail, let Raft retry it", msg.to);
             /* don't error or we crash)
@@ -468,7 +465,7 @@ fn ack_proposal(
                 success,
             )))
             .wait()
-            .map_err(|e| Error::ViolatesContract(format!("failed to send: {}", e)))
+            .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
     } else if let Some(remote) = remote_mailboxes.get(&proposal.proposer) {
         remote
             .send(WsMessage::Msg(HandshakeMsg::AckProposal(
@@ -476,15 +473,18 @@ fn ack_proposal(
                 success,
             )))
             .wait()
-            .map_err(|e| Error::ViolatesContract(format!("failed to send: {}", e)))
+            .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
     } else {
         println!(
             "send ack proposla to {} fail, let Raft retry it",
             proposal.proposer
         );
-        Err(Error::ViolatesContract(format!(
-            "send ack proposla to {} fail, let Raft retry it",
-            proposal.proposer
+        Err(Error::Io(IoError::new(
+            IoErrorKind::ConnectionAborted,
+            format!(
+                "send ack proposla to {} fail, let Raft retry it",
+                proposal.proposer
+            ),
         )))
     }
 }

@@ -731,8 +731,15 @@ fn main() -> std::io::Result<()> {
                 .long("id")
                 .value_name("ID")
                 .help("The Node ID")
-                .default_value("uring01")
                 .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("bootstrap")
+                .short("b")
+                .long("bootstrap")
+                .value_name("BOOTSTRAP")
+                .help("Sets the node to bootstrap and become leader")
+                .takes_value(false),
         )
         .arg(
             Arg::with_name("peers")
@@ -755,13 +762,13 @@ fn main() -> std::io::Result<()> {
         .get_matches();
 
     let peers = matches.values_of_lossy("peers").unwrap_or(vec![]);
+    let bootstrap = matches.is_present("bootstrap");
     let (tx, rx) = bounded(100);
     let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
     let id: u64 = matches.value_of("id").unwrap_or("1").parse().unwrap();
-    let leader = peers.is_empty();
     let my_endpoint = endpoint.to_string();
     let tx1 = tx.clone();
-    thread::spawn(move || loopy_thing(id, my_endpoint, leader, rx, tx1, logger));
+    thread::spawn(move || loopy_thing(id, my_endpoint, bootstrap, rx, tx1, logger));
 
     for peer in peers {
         let tx = tx.clone();

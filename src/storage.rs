@@ -14,7 +14,6 @@
 
 // inspired by https://github.com/LucioFranco/kv/blob/master/src/storage.rs
 
-
 use protobuf::Message;
 use raft::eraftpb::{ConfState, HardState};
 use raft::eraftpb::{Entry, Snapshot};
@@ -72,9 +71,7 @@ impl WriteStorage for URMemStorage {
         cs: ConfState,
         pending_membership_change: Option<(ConfState, u64)>,
     ) -> RaftResult<()> {
-        self.backend
-            .wl()
-            .set_conf_state(cs, pending_membership_change);
+        self.backend.wl().set_conf_state(cs);
         Ok(())
     }
 
@@ -137,8 +134,9 @@ impl URRocksStorage {
         db
     }
     pub fn new(id: u64) -> Self {
+        let backend = DB::open_default(&format!("raft-rocks-{}", id)).unwrap();
         Self {
-            backend: DB::open_default(&format!("raft-rocks-{}", id)).unwrap(),
+            backend,
             pending_conf_state: None,
             pending_conf_state_start_index: None,
             conf_state: None,
@@ -159,6 +157,23 @@ impl URRocksStorage {
         };
         cs
     }
+    fn clear_log(&self) {
+        self.backend
+            .iterator(IteratorMode::From(&LOW_INDEX, Direction::Forward))
+            .filter_map(|(k, _)| {
+                let k1: &[u8] = k.borrow();
+                if k1 != &HARD_STATE[..] && k1 != &CONF_STATE[..] {
+                    Some(k)
+                } else {
+                    None
+                }
+            })
+            .take_while(|k| {
+                let k: &[u8] = k.borrow();
+                k != &HIGH_INDEX[..]
+            })
+            .for_each(|k| self.backend.delete(&k).unwrap());
+    }
 }
 
 impl WriteStorage for URRocksStorage {
@@ -174,15 +189,9 @@ impl WriteStorage for URRocksStorage {
         }
 
         self.set_hard_state(index, term)?;
-
         self.set_conf_state(meta.take_conf_state(), None)?;
-
-        if meta.get_next_conf_state_index() > 0 {
-            let cs = meta.take_next_conf_state();
-            let i = meta.get_next_conf_state_index();
-            self.pending_conf_state = Some(cs);
-            self.pending_conf_state_start_index = Some(i);
-        }
+        // From Mem node do we only want to clear up to index?
+        self.clear_log();
         Ok(())
     }
 
@@ -358,11 +367,6 @@ impl ReadStorage for URRocksStorage {
         meta.term = term;
 
         meta.set_conf_state(self.get_conf_state().clone());
-        if let Some(ref cs) = self.pending_conf_state {
-            let i = self.pending_conf_state_start_index.unwrap();
-            meta.set_next_conf_state(cs.clone());
-            meta.set_next_conf_state_index(i);
-        }
         // https://github.com/tikv/raft-rs/blob/3f5171a9f833679cb40437ca47031eb0e9f4aa3e/src/storage.rs#L494
         if meta.index < request_index {
             meta.index = request_index;
