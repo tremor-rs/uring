@@ -234,6 +234,13 @@ impl ReadStorage for URRocksStorage {
         //initial_state.conf_state.set_learners(cs.take_learners());
 
         Ok(initial_state)
+        /*
+        let hard_state = self.get_hard_state();
+        if hard_state == HardState::default() {
+            return Ok(RaftState::new(hard_state, ConfState::default()));
+        };
+        Ok(RaftState::new(hard_state, self.get_conf_state()))
+        */
     }
 
     fn entries(
