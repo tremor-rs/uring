@@ -474,7 +474,7 @@ fn loopy_thing(
     } else {
         RaftNode::create_raft_follower(id, my_endpoint, rx.clone(), &logger)
     };
-    node.log(&logger);
+    node.log();
 
     let mut known_peers: HashMap<u64, String> = HashMap::new();
     loop {
@@ -687,7 +687,7 @@ fn loopy_thing(
 
         if t1.elapsed() >= Duration::from_secs(10) {
             // Tick the raft.
-            node.log(&logger);
+            node.log();
             t1 = Instant::now();
         }
 

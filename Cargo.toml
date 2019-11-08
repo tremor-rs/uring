@@ -15,7 +15,9 @@ actix-codec = "0.1"
 
 raft = "0.6.0-alpha"
 rocksdb = "0.12"
-slog = "2"
+#slog = "2"
+slog = { version = "2", features = ["max_level_info", "release_max_level_warn"] }
+
 slog-term = "*"
 slog-async = "*"
 

@@ -24,11 +24,7 @@ use std::borrow::Borrow;
 pub trait WriteStorage: ReadStorage {
     fn append(&self, entries: &[Entry]) -> RaftResult<()>;
     fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()>;
-    fn set_conf_state(
-        &mut self,
-        cs: ConfState,
-        pending_membership_change: Option<(ConfState, u64)>,
-    ) -> RaftResult<()>;
+    fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()>;
     fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()>;
 }
 
@@ -66,11 +62,7 @@ impl WriteStorage for URMemStorage {
         self.backend.wl().append(entries)
     }
 
-    fn set_conf_state(
-        &mut self,
-        cs: ConfState,
-        pending_membership_change: Option<(ConfState, u64)>,
-    ) -> RaftResult<()> {
+    fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()> {
         self.backend.wl().set_conf_state(cs);
         Ok(())
     }
@@ -120,8 +112,6 @@ const HARD_STATE: &'static [u8; 16] = b"\0\0\0\0\0\0\0HardState";
 //#[derive(Default)]
 pub struct URRocksStorage {
     backend: DB,
-    pending_conf_state: Option<ConfState>,
-    pending_conf_state_start_index: Option<u64>,
     conf_state: Option<ConfState>,
 }
 
@@ -129,7 +119,7 @@ impl URRocksStorage {
     pub fn new_with_conf_state(id: u64, state: ConfState) -> Self {
         let mut db = Self::new(id);
 
-        db.set_conf_state(state, None).unwrap();
+        db.set_conf_state(state).unwrap();
         db.set_hard_state(1, 1).unwrap();
         db
     }
@@ -137,8 +127,6 @@ impl URRocksStorage {
         let backend = DB::open_default(&format!("raft-rocks-{}", id)).unwrap();
         Self {
             backend,
-            pending_conf_state: None,
-            pending_conf_state_start_index: None,
             conf_state: None,
         }
     }
@@ -189,7 +177,7 @@ impl WriteStorage for URRocksStorage {
         }
 
         self.set_hard_state(index, term)?;
-        self.set_conf_state(meta.take_conf_state(), None)?;
+        self.set_conf_state(meta.take_conf_state())?;
         // From Mem node do we only want to clear up to index?
         self.clear_log();
         Ok(())
@@ -199,7 +187,6 @@ impl WriteStorage for URRocksStorage {
         if entries.is_empty() {
             return Ok(());
         }
-        //dbg!(&entries);
         let mut batch = WriteBatch::default();
         for entry in entries {
             let key = make_log_key(entry.index);
@@ -212,20 +199,12 @@ impl WriteStorage for URRocksStorage {
         Ok(())
     }
 
-    fn set_conf_state(
-        &mut self,
-        cs: ConfState,
-        pending_membership_change: Option<(ConfState, u64)>,
-    ) -> RaftResult<()> {
+    fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()> {
         self.conf_state = Some(cs.clone());
 
         let data = cs.write_to_bytes()?;
         self.backend.put(&CONF_STATE, &data).unwrap();
         self.backend.flush().unwrap();
-        if let Some((cs, idx)) = pending_membership_change {
-            self.pending_conf_state = Some(cs);
-            self.pending_conf_state_start_index = Some(idx);
-        }
         Ok(())
     }
 
@@ -244,15 +223,16 @@ impl ReadStorage for URRocksStorage {
     fn initial_state(&self) -> RaftResult<RaftState> {
         let mut initial_state = RaftState::default();
         if let Some(ref cs) = self.conf_state {
-            initial_state.conf_state = cs.clone()
+            initial_state.conf_state = cs.clone();
+            initial_state.hard_state = self.get_hard_state();
         }
-        // initial_state.conf_state = self.get_conf_state();
+
+        //initial_state.conf_state = self.get_conf_state();
 
         //let mut cs = self.get_conf_state();
         //initial_state.conf_state.set_nodes(cs.take_nodes());
         //initial_state.conf_state.set_learners(cs.take_learners());
 
-        initial_state.hard_state = self.get_hard_state();
         Ok(initial_state)
     }
 

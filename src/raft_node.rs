@@ -91,6 +91,7 @@ remote connections: {:?}
 }
 
 pub struct RaftNode {
+    pub logger: Logger,
     // None if the raft is not initialized.
     pub id: u64,
     pub endpoint: String,
@@ -108,10 +109,10 @@ pub struct RaftNode {
 }
 
 impl RaftNode {
-    pub fn log(&self, logger: &Logger) {
+    pub fn log(&self) {
         if let Some(g) = self.raft_group.as_ref() {
-            debug!(
-                logger,
+            info!(
+                self.logger,
                 "NODE STATE";
                 "node-id" => &g.raft.id,
                 "role" => format!("{:?}", self.role()),
@@ -135,7 +136,7 @@ impl RaftNode {
                 "remote-mailboxes" => format!("{:?}", &self.remote_mailboxes.keys()),
             )
         } else {
-            error!(logger, "UNINITIALIZED NODE {}", self.id)
+            error!(self.logger, "UNINITIALIZED NODE {}", self.id)
         }
     }
     pub fn get_key(&self, key: String) -> String {
@@ -184,6 +185,7 @@ impl RaftNode {
         let storage = UsedStorage::new_with_conf_state(id, ConfState::from((vec![id], vec![])));
         let raft_group = Some(RawNode::new(&cfg, storage, logger).unwrap());
         Self {
+            logger: logger.clone(),
             id,
             endpoint,
             raft_group,
@@ -207,6 +209,7 @@ impl RaftNode {
     ) -> Self {
         let storage = UsedStorage::new(id);
         Self {
+            logger: logger.clone(),
             id,
             endpoint,
             raft_group: if storage.last_index().unwrap() == 1 {
@@ -235,7 +238,7 @@ impl RaftNode {
         let mut cfg = example_config();
         cfg.id = msg.to;
         let storage = UsedStorage::new(self.id);
-        self.raft_group = Some(RawNode::with_default_logger(&cfg, storage).unwrap());
+        self.raft_group = Some(RawNode::new(&cfg, storage, &self.logger).unwrap());
     }
 
     // Step a raft message, initialize the raft if need.
@@ -277,7 +280,7 @@ impl RaftNode {
             .raft
             .raft_log
             .store
-            .set_conf_state(cs, None)
+            .set_conf_state(cs)
     }
 
     // interface for raft-rs
@@ -341,7 +344,7 @@ impl RaftNode {
                         .raft_group
                         .as_mut()
                         .unwrap()
-                        .apply_conf_change(dbg!(&cc))
+                        .apply_conf_change(&cc)
                         .unwrap();
                     self.set_conf_state(cs)?;
                 } else {
@@ -362,6 +365,7 @@ impl RaftNode {
                             self.pending_proposals.remove(&proposal.id);
                         } else {
                             ack_proposal(
+                                &self.logger,
                                 &self.local_mailboxes,
                                 &self.remote_mailboxes,
                                 &proposal,
@@ -390,7 +394,13 @@ impl RaftNode {
                         pending.push(prop);
                     }
                 } else {
-                    ack_proposal(&self.local_mailboxes, &self.remote_mailboxes, p, false)?;
+                    ack_proposal(
+                        &self.logger,
+                        &self.local_mailboxes,
+                        &self.remote_mailboxes,
+                        p,
+                        false,
+                    )?;
                 }
             }
         }
@@ -412,7 +422,7 @@ impl RaftNode {
                 .wait()
                 .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
         } else {
-            println!("send raft message to {} fail, let Raft retry it", msg.to);
+            debug!(self.logger, "send raft message fail, let Raft retry it"; "to"=> msg.to);
             /* don't error or we crash)
             Err(Error::ViolatesContract(format!(
                 "send raft message to {} fail, let Raft retry it",
@@ -428,7 +438,7 @@ pub(crate) fn propose_and_check_failed_proposal(
     raft_group: &mut RawNode<UsedStorage>,
     proposal: &mut Proposal,
 ) -> Result<bool> {
-    let last_index1 = dbg!(raft_group.raft.raft_log.last_index() + 1);
+    let last_index1 = raft_group.raft.raft_log.last_index() + 1;
     if let Some((ref key, ref value)) = proposal.normal {
         let data = format!("put {} {}", key, value).into_bytes();
         raft_group.propose(vec![], data)?;
@@ -453,6 +463,7 @@ pub(crate) fn propose_and_check_failed_proposal(
 }
 
 fn ack_proposal(
+    logger: &Logger,
     local_mailboxes: &LocalMailboxes,
     remote_mailboxes: &RemoteMailboxes,
     proposal: &Proposal,
@@ -475,9 +486,9 @@ fn ack_proposal(
             .wait()
             .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
     } else {
-        println!(
-            "send ack proposla to {} fail, let Raft retry it",
-            proposal.proposer
+        debug!(logger,
+            "send ack proposla  fail, let Raft retry it";
+            "to" =>proposal.proposer
         );
         Err(Error::Io(IoError::new(
             IoErrorKind::ConnectionAborted,
