@@ -146,6 +146,11 @@ impl URRocksStorage {
         cs
     }
     fn clear_log(&self) {
+        self.clear_log_before(u64::max_value());
+    }
+
+    fn clear_log_before(&self, before: u64) {
+        let before = make_log_key(before);
         self.backend
             .iterator(IteratorMode::From(&LOW_INDEX, Direction::Forward))
             .filter_map(|(k, _)| {
@@ -158,7 +163,7 @@ impl URRocksStorage {
             })
             .take_while(|k| {
                 let k: &[u8] = k.borrow();
-                k != &HIGH_INDEX[..]
+                k <= &before[..]
             })
             .for_each(|k| self.backend.delete(&k).unwrap());
     }
@@ -214,6 +219,7 @@ impl WriteStorage for URRocksStorage {
         hs.term = term;
         let data = hs.write_to_bytes()?;
         self.backend.put(&HARD_STATE, &data).unwrap();
+        self.clear_log_before(commit);
         self.backend.flush().unwrap();
         Ok(())
     }
@@ -221,6 +227,7 @@ impl WriteStorage for URRocksStorage {
 
 impl ReadStorage for URRocksStorage {
     fn initial_state(&self) -> RaftResult<RaftState> {
+        /*
         let mut initial_state = RaftState::default();
         if let Some(ref cs) = self.conf_state {
             initial_state.conf_state = cs.clone();
@@ -234,13 +241,19 @@ impl ReadStorage for URRocksStorage {
         //initial_state.conf_state.set_learners(cs.take_learners());
 
         Ok(initial_state)
-        /*
+        */
         let hard_state = self.get_hard_state();
         if hard_state == HardState::default() {
             return Ok(RaftState::new(hard_state, ConfState::default()));
         };
-        Ok(RaftState::new(hard_state, self.get_conf_state()))
-        */
+        let conf_state = self.get_conf_state();
+        dbg!(
+            &hard_state,
+            &conf_state,
+            self.first_index(),
+            self.last_index()
+        );
+        Ok(RaftState::new(hard_state, conf_state))
     }
 
     fn entries(
