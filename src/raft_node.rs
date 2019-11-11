@@ -101,7 +101,6 @@ pub struct RaftNode {
     pub remote_mailboxes: RemoteMailboxes,
     // Key-value pairs after applied. `MemStorage` only contains raft logs,
     // so we need an additional storage engine.
-    pub kv_pairs: HashMap<String, String>,
     pub proposals: VecDeque<Proposal>,
     pub pending_proposals: HashMap<u64, Proposal>,
     pub pending_acks: HashMap<u64, Sender<bool>>,
@@ -139,14 +138,23 @@ impl RaftNode {
             error!(self.logger, "UNINITIALIZED NODE {}", self.id)
         }
     }
-    pub fn get_key(&self, key: String) -> String {
-        self.kv_pairs
+    pub fn get_key(&self, key: String) -> Option<String> {
+        self.raft_group
+            .as_ref()
+            .unwrap()
+            .raft
+            .raft_log
+            .store
             .get(&key)
-            .cloned()
-            .unwrap_or_else(|| "<NOT FOUND>".into())
     }
     pub fn put_key(&mut self, key: String, value: String) -> bool {
-        self.kv_pairs.insert(key, value);
+        self.raft_group
+            .as_ref()
+            .unwrap()
+            .raft
+            .raft_log
+            .store
+            .put(&key, value);
         true
     }
     pub fn is_running(&self) -> bool {
@@ -193,7 +201,6 @@ impl RaftNode {
             proposals: VecDeque::new(),
             local_mailboxes: HashMap::new(),
             remote_mailboxes: HashMap::new(),
-            kv_pairs: Default::default(),
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
@@ -223,7 +230,6 @@ impl RaftNode {
             proposals: VecDeque::new(),
             local_mailboxes: HashMap::new(),
             remote_mailboxes: HashMap::new(),
-            kv_pairs: Default::default(),
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
@@ -353,8 +359,7 @@ impl RaftNode {
                     let data = std::str::from_utf8(&entry.data).unwrap();
                     let reg = Regex::new("put (.+) (.+)").unwrap();
                     if let Some(caps) = reg.captures(&data) {
-                        self.kv_pairs
-                            .insert(caps[1].to_string(), caps[2].to_string());
+                        self.put_key(caps[1].to_string(), caps[2].to_string());
                     }
                 }
                 if self.raft_group.as_ref().unwrap().raft.state == StateRole::Leader {
@@ -362,8 +367,13 @@ impl RaftNode {
                     // succeeded or not.
                     if let Some(proposal) = self.proposals.pop_front() {
                         if proposal.proposer == self.id {
+                            info!(self.logger, "Handling proposal(local)"; "proposal-id" => proposal.id);
+                            if let Some(reply) = self.pending_acks.remove(&proposal.id) {
+                                reply.send(true);
+                            }
                             self.pending_proposals.remove(&proposal.id);
                         } else {
+                            info!(self.logger, "Handling proposal(remopte)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
                             ack_proposal(
                                 &self.logger,
                                 &self.local_mailboxes,

@@ -19,6 +19,7 @@ use raft::eraftpb::{ConfState, HardState};
 use raft::eraftpb::{Entry, Snapshot};
 use raft::storage::{MemStorage, RaftState, Storage as ReadStorage};
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
+use regex::Regex;
 use std::borrow::Borrow;
 /// The missing storage trait from raft-rs ...
 pub trait WriteStorage: ReadStorage {
@@ -146,32 +147,85 @@ impl URRocksStorage {
         cs
     }
     fn clear_log(&self) {
-        self.clear_log_before(u64::max_value());
+        self.clear_log_to(u64::max_value());
     }
 
-    fn clear_log_before(&self, before: u64) {
+    fn clear_log_to(&self, before: u64) {
         let before = make_log_key(before);
         self.backend
             .iterator(IteratorMode::From(&LOW_INDEX, Direction::Forward))
-            .filter_map(|(k, _)| {
-                let k1: &[u8] = k.borrow();
-                if k1 != &HARD_STATE[..] && k1 != &CONF_STATE[..] {
-                    Some(k)
-                } else {
-                    None
-                }
+            .take_while(|(k, _)| {
+                let k: &[u8] = k.borrow();
+                k <= &HIGH_INDEX[..]
             })
-            .take_while(|k| {
+            .take_while(|(k, _)| {
                 let k: &[u8] = k.borrow();
                 k <= &before[..]
             })
-            .for_each(|k| self.backend.delete(&k).unwrap());
+            .for_each(|(k, _)| self.backend.delete(&k).unwrap());
+    }
+
+    fn clear_data(&self) {
+        self.backend
+            .iterator(IteratorMode::From(&LOW_DATA, Direction::Forward))
+            .take_while(|(k, _)| {
+                let k: &[u8] = k.borrow();
+                // NOTE: we got to use < here since we don't have a fixed "last key" for data as it's not fixed size
+                // HIGH_DATA is technically LOW of the next segment
+                k < &HIGH_DATA[..]
+            })
+            .for_each(|(k, _)| self.backend.delete(&k).unwrap());
+    }
+
+    pub fn get(&self, key: &str) -> Option<String> {
+        let key = make_data_key(key);
+        self.backend
+            .get(key)
+            .unwrap()
+            .map(|v| String::from_utf8_lossy(&v).to_string())
+    }
+    pub fn put(&self, key: &str, value: String) {
+        let key = make_data_key(key);
+        self.backend.put(key, value).unwrap();
+    }
+
+    pub fn data_snapshot(&self) -> Vec<u8> {
+        self.backend
+            .iterator(IteratorMode::From(&LOW_DATA, Direction::Forward))
+            .take_while(|(k, _)| {
+                let k: &[u8] = k.borrow();
+                k < &HIGH_DATA[..]
+            })
+            .map(|(k, v)| {
+                let mut s = String::from("put ");
+                s.push_str(std::str::from_utf8(&k[8..]).unwrap());
+                s.push(' ');
+                s.push_str(std::str::from_utf8(&v).unwrap());
+                s
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+            .into_bytes()
+    }
+
+    pub fn apply_data_snapshot(&self, data: Vec<u8>) {
+        let data = String::from_utf8(data).unwrap();
+        self.clear_data();
+
+        let reg = Regex::new("put (.+) (.+)").unwrap();
+
+        for kv in data.split('\n') {
+            if let Some(caps) = reg.captures(&kv) {
+                self.put(&caps[1], caps[2].to_string());
+            }
+        }
     }
 }
 
 impl WriteStorage for URRocksStorage {
     fn apply_snapshot(&mut self, mut snapshot: Snapshot) -> RaftResult<()> {
         let mut meta = snapshot.take_metadata();
+        self.apply_data_snapshot(snapshot.take_data());
         let term = meta.term;
         let index = meta.index;
 
@@ -219,7 +273,7 @@ impl WriteStorage for URRocksStorage {
         hs.term = term;
         let data = hs.write_to_bytes()?;
         self.backend.put(&HARD_STATE, &data).unwrap();
-        self.clear_log_before(commit);
+        self.clear_log_to(commit);
         self.backend.flush().unwrap();
         Ok(())
     }
@@ -227,32 +281,11 @@ impl WriteStorage for URRocksStorage {
 
 impl ReadStorage for URRocksStorage {
     fn initial_state(&self) -> RaftResult<RaftState> {
-        /*
-        let mut initial_state = RaftState::default();
-        if let Some(ref cs) = self.conf_state {
-            initial_state.conf_state = cs.clone();
-            initial_state.hard_state = self.get_hard_state();
-        }
-
-        //initial_state.conf_state = self.get_conf_state();
-
-        //let mut cs = self.get_conf_state();
-        //initial_state.conf_state.set_nodes(cs.take_nodes());
-        //initial_state.conf_state.set_learners(cs.take_learners());
-
-        Ok(initial_state)
-        */
         let hard_state = self.get_hard_state();
         if hard_state == HardState::default() {
             return Ok(RaftState::new(hard_state, ConfState::default()));
         };
         let conf_state = self.get_conf_state();
-        dbg!(
-            &hard_state,
-            &conf_state,
-            self.first_index(),
-            self.last_index()
-        );
         Ok(RaftState::new(hard_state, conf_state))
     }
 
@@ -276,9 +309,9 @@ impl ReadStorage for URRocksStorage {
         let iter = self
             .backend
             .iterator(IteratorMode::From(&low_key, Direction::Forward))
-            .filter(|(k, _)| {
+            .take_while(|(k, _)| {
                 let k: &[u8] = k.borrow();
-                k != &HARD_STATE[..] && k != &CONF_STATE[..]
+                k <= &HIGH_INDEX[..]
             })
             .map(|(_, v)| {
                 let mut e = Entry::new();
@@ -324,9 +357,9 @@ impl ReadStorage for URRocksStorage {
         let first = self
             .backend
             .iterator(IteratorMode::From(&LOW_INDEX, Direction::Forward))
-            .filter(|(k, _)| {
+            .take_while(|(k, _)| {
                 let k: &[u8] = k.borrow();
-                k != &HARD_STATE[..] && k != &CONF_STATE[..]
+                k <= &HIGH_INDEX[..]
             })
             .next()
             .map(|(_, v)| {
@@ -342,9 +375,9 @@ impl ReadStorage for URRocksStorage {
         let last = self
             .backend
             .iterator(IteratorMode::From(&HIGH_INDEX, Direction::Reverse))
-            .filter(|(k, _)| {
+            .take_while(|(k, _)| {
                 let k: &[u8] = k.borrow();
-                k != &HARD_STATE[..] && k != &CONF_STATE[..]
+                k >= &LOW_INDEX[..]
             })
             .next()
             .map(|(_k, v)| {
@@ -362,6 +395,7 @@ impl ReadStorage for URRocksStorage {
         // Use the latest applied_idx to construct the snapshot.
         let applied_idx = hs.commit;
         let term = hs.term;
+        snapshot.set_data(self.data_snapshot());
         let meta = snapshot.mut_metadata();
         meta.index = applied_idx;
         meta.term = term;
@@ -377,6 +411,7 @@ impl ReadStorage for URRocksStorage {
 
 const CONF_PREFIX: u8 = 0;
 const RAFT_PREFIX: u8 = 1;
+const DATA_PREFIX: u8 = 2;
 // https://github.com/LucioFranco/kv/blob/417dbb7f969bd311e1e9ed91ab9980a1cae25f56/src/storage.rs#L152
 const HIGH_INDEX: [u8; 16] = [
     RAFT_PREFIX,
@@ -397,6 +432,9 @@ const HIGH_INDEX: [u8; 16] = [
     255,
 ];
 const LOW_INDEX: [u8; 16] = [RAFT_PREFIX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+const LOW_DATA: [u8; 8] = [DATA_PREFIX, 0, 0, 0, 0, 0, 0, 0];
+const HIGH_DATA: [u8; 8] = [DATA_PREFIX + 1, 0, 0, 0, 0, 0, 0, 0];
 fn make_log_key(idx: u64) -> [u8; 16] {
     use bytes::BufMut;
     use std::io::Cursor;
@@ -404,8 +442,22 @@ fn make_log_key(idx: u64) -> [u8; 16] {
 
     {
         let mut key = Cursor::new(&mut key[..]);
-        key.put_u64_le(1);
+        key.put_u64_le(RAFT_PREFIX as u64);
         key.put_u64_le(idx);
+    }
+
+    key
+}
+
+fn make_data_key(key_s: &str) -> Vec<u8> {
+    use bytes::{BufMut, BytesMut};
+    use std::io::{Cursor, Write};
+    let mut key = vec![0; 8 + key_s.len()];
+
+    {
+        let mut key = Cursor::new(&mut key[..]);
+        key.put_u64_le(DATA_PREFIX as u64);
+        key.write_all(key_s.as_bytes());
     }
 
     key

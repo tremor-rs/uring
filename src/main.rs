@@ -85,8 +85,11 @@ fn get(
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
     srv.get_ref().tx.send(UrMsg::Get(params.id.clone(), tx));
-    let res = rx.recv().unwrap();
-    Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()).set_body(res.into()))
+    if let Some(res) = rx.recv().unwrap() {
+        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()).set_body(res.into()))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
+    }
 }
 
 /// do websocket handshake and start `UrSocket` actor
@@ -451,7 +454,7 @@ pub enum UrMsg {
     AckProposal(u64, bool),
     ForwardProposal(u64, u64, String, String),
     RaftMsg(RaftMessage),
-    Get(String, Sender<String>),
+    Get(String, Sender<Option<String>>),
     Put(String, String, Sender<bool>),
     GetNode(u64, Sender<bool>),
     PutNode(u64, Sender<bool>),
@@ -482,10 +485,12 @@ fn loopy_thing(
         loop {
             match rx.try_recv() {
                 Ok(UrMsg::GetNode(id, reply)) => {
+                    info!(logger, "Getting node status"; "id" => id);
                     let g = node.raft_group.as_ref().unwrap();
                     reply.send(g.raft.prs().configuration().contains(id));
                 }
                 Ok(UrMsg::PutNode(id, reply)) => {
+                    info!(logger, "Adding node"; "id" => id);
                     let g = node.raft_group.as_ref().unwrap();
                     if node.is_leader() && !g.raft.prs().configuration().contains(id) {
                         let mut conf_change = ConfChange::default();
@@ -503,18 +508,23 @@ fn loopy_thing(
                     }
                 }
                 Ok(UrMsg::Get(key, reply)) => {
-                    reply.send(node.get_key(key));
+                    info!(logger, "Reading key"; "key" => &key);
+                    let value = node.get_key(key);
+                    info!(logger, "Found value"; "value" => &value);
+                    reply.send(value);
                 }
                 Ok(UrMsg::Put(key, value, reply)) => {
                     let pid = node.proposal_id;
                     node.proposal_id += 1;
                     let from = node.id;
                     if node.is_leader() {
+                        info!(logger, "Writing key (on leader)"; "key" => &key, "proposal-id" => pid, "from" => from);
                         node.pending_acks.insert(pid, reply.clone());
                         node.proposals
-                            .push_back(Proposal::normal(from, pid, key, value));
+                            .push_back(Proposal::normal(pid, from, key, value));
                     } else {
                         let leader = node.leader();
+                        info!(logger, "Writing key (forwarded)"; "key" => &key, "proposal-id" => pid, "forwarded-to" => leader);
                         let msg =
                             WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
                         if let Some(remote) = node.local_mailboxes.get(&leader) {
@@ -543,7 +553,7 @@ fn loopy_thing(
                 Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
                     if node.is_leader() {
                         node.proposals
-                            .push_back(Proposal::normal(from, pid, key, value));
+                            .push_back(Proposal::normal(pid, from, key, value));
                     } else {
                         let leader = node.leader();
                         let msg =
@@ -588,14 +598,13 @@ fn loopy_thing(
                 // Reply to hello => sends RegisterLocal
                 Ok(UrMsg::RegisterRemote(id, peer, endpoint)) => {
                     if id != node.id {
+                        info!(&logger, "register(remote)"; "remote-id" => id, "remote-peer" => &peer);
                         if !known_peers.contains_key(&id) {
                             known_peers.insert(id, peer.clone());
-                            //let tx = tx.clone();
-                            //let node_id = node.id;
-                            //thread::spawn(move || remote_endpoint(node_id, peer, tx));
+                            let tx = tx.clone();
+                            let node_id = node.id;
+                            thread::spawn(move || remote_endpoint(node_id, peer, tx));
                         }
-                        let g = node.raft_group.as_ref().unwrap();
-                        info!(&logger, "register(remote)"; "remote-id" => id, "remote-peer" => peer);
                         endpoint
                             .clone()
                             .send(WsMessage::Msg(HandshakeMsg::Welcome(
@@ -609,37 +618,7 @@ fn loopy_thing(
                             .wait()
                             .unwrap();
                         node.remote_mailboxes.insert(id, endpoint.clone());
-                        /*
-                        if !g.raft.prs().configuration().contains(id) {
-                            info!(&logger, "ADDING NODE"; "id" => id);
-                            let mut conf_change = ConfChange::default();
-                            conf_change.node_id = id;
-                            conf_change.set_change_type(ConfChangeType::AddNode);
-                            let proposal =
-                                Proposal::conf_change(node.proposal_id, node.id, &conf_change);
-                            node.proposal_id += 1;
-
-                            // FIXME might not be the leader
-                            node.proposals.push_back(proposal);
-                            // This is the first node added so we introduce a AddNode for the bootstrap node
-                            if g.raft.prs().configuration().voters().len()
-                                + g.raft.prs().configuration().learners().len()
-                                == 1
-                                && bootstrap
-                            {
-                                info!(&logger, "ADDING NODE(SELF)"; "id" => node.id);
-                                let mut conf_change = ConfChange::default();
-                                conf_change.node_id = node.id;
-                                conf_change.set_change_type(ConfChangeType::AddNode);
-                                let proposal =
-                                    Proposal::conf_change(node.proposal_id, node.id, &conf_change);
-                                node.proposal_id += 1;
-                                node.proposals.push_back(proposal);
-                            }
-                        }
-                        */
                     }
-                    // TODO: How to check if it was accepted
                 }
                 Ok(UrMsg::DownLocal(id)) => {
                     warn!(&logger, "down(local)"; "id" => id);
@@ -658,12 +637,6 @@ fn loopy_thing(
 
                 // RAFT
                 Ok(UrMsg::RaftMsg(msg)) => {
-                    //node.is_leader() ||
-                    // if msg.get_msg_type() != MessageType::MsgHeartbeat
-                    //     && msg.get_msg_type() != MessageType::MsgHeartbeatResponse
-                    // {
-                    //println!("step: {:?}", msg);
-                    // }
                     if let Err(e) = node.step(msg) {
                         error!(&logger, "step error"; "error" => format!("{}", e));
                     }
