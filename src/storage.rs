@@ -20,7 +20,6 @@ use raft::eraftpb::{ConfState, HardState};
 use raft::eraftpb::{Entry, Snapshot};
 use raft::storage::{MemStorage, RaftState, Storage as ReadStorage};
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
-use regex::Regex;
 use std::borrow::Borrow;
 /// The missing storage trait from raft-rs ...
 pub trait WriteStorage: ReadStorage {
@@ -407,7 +406,7 @@ impl ReadStorage for URRocksStorage {
     }
 }
 
-const CONF_PREFIX: u8 = 0;
+// const CONF_PREFIX: u8 = 0;
 const RAFT_PREFIX: u8 = 1;
 const DATA_PREFIX: u8 = 2;
 // https://github.com/LucioFranco/kv/blob/417dbb7f969bd311e1e9ed91ab9980a1cae25f56/src/storage.rs#L152
@@ -448,14 +447,14 @@ fn make_log_key(idx: u64) -> [u8; 16] {
 }
 
 fn make_data_key(key_s: &str) -> Vec<u8> {
-    use bytes::{BufMut, BytesMut};
+    use bytes::BufMut;
     use std::io::{Cursor, Write};
     let mut key = vec![0; 8 + key_s.len()];
 
     {
         let mut key = Cursor::new(&mut key[..]);
         key.put_u64_le(DATA_PREFIX as u64);
-        key.write_all(key_s.as_bytes());
+        key.write_all(key_s.as_bytes()).unwrap();
     }
 
     key

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod codec;
+#[allow(unused)]
 pub mod errors;
 mod raft_node;
 mod storage;
@@ -34,7 +36,6 @@ use futures::{
     stream::{SplitSink, Stream},
     Future,
 };
-use protobuf::Message as PBMessage;
 use raft::eraftpb::Message as RaftMessage;
 use raft::{prelude::*, StateRole};
 use raft_node::*;
@@ -54,9 +55,9 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 macro_rules! eat_error {
-    ($e:expr) => {
+    ($l:expr, $e:expr) => {
         if let Err(e) = $e {
-            println!("[WS Error] {}", e)
+            error!($l, "[WS Error] {}", e)
         }
     };
 }
@@ -89,7 +90,7 @@ fn get(
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
     let key = params.id.clone();
-    srv.get_ref().tx.send(UrMsg::Get(key.clone(), tx));
+    srv.get_ref().tx.send(UrMsg::Get(key.clone(), tx)).unwrap();
     if let Some(value) = rx.recv().unwrap() {
         Ok(HttpResponse::Ok().json(KV { key, value }))
     } else {
@@ -131,7 +132,10 @@ fn get_node(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::GetNode(params.id, tx));
+    srv.get_ref()
+        .tx
+        .send(UrMsg::GetNode(params.id, tx))
+        .unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -146,7 +150,10 @@ fn post_node(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::AddNode(params.id, tx));
+    srv.get_ref()
+        .tx
+        .send(UrMsg::AddNode(params.id, tx))
+        .unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -217,8 +224,11 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for UrSocket {
                 //ctx.text(text)
             }
             ws::Message::Binary(bin) => {
-                let mut msg = RaftMessage::default();
-                msg.merge_from_bytes(&bin).unwrap();
+                let msg: codec::json::Event = serde_json::from_slice(&bin).unwrap();
+                let msg: RaftMessage = msg.into();
+                // TODO FIXME feature flag pb / json
+                // let mut msg = RaftMessage::default();
+                // msg.merge_from_bytes(&bin).unwrap();
                 //println!("recived raft message {:?}", msg);
                 self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
             }
@@ -245,8 +255,18 @@ impl Handler<WsMessage> for UrSocket {
 impl Handler<RaftMsg> for UrSocket {
     type Result = ();
     fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
-        //println!("Sending Raft message to (incoming): {:?}", msg.0);
-        let data = msg.0.write_to_bytes().unwrap();
+        // let data = msg.0.write_to_bytes().unwrap();
+        // TODO FIXME Allow switching from pb <-> json by feature flag
+        let data: codec::json::Event = msg.0.clone().into();
+        /*
+        if data.kind != codec::json::EventType::Heartbeat
+            && data.kind != codec::json::EventType::HeartbeatResponse
+        {
+            info!(self.node.logger, "{:?} => {:?}", msg.0, &data);
+        }
+        */
+        let data = serde_json::to_string_pretty(&data);
+        let data: bytes::Bytes = data.unwrap().into();
         ctx.binary(data);
     }
 }
@@ -268,7 +288,10 @@ impl UrSocket {
             // check client heartbeats
             if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
                 // heartbeat timed out
-                println!("Websocket Client heartbeat failed, disconnecting!");
+                error!(
+                    act.node.logger,
+                    "Websocket Client heartbeat failed, disconnecting!"
+                );
 
                 // stop actor
                 ctx.stop();
@@ -286,19 +309,28 @@ impl UrSocket {
 struct Node {
     id: u64,
     tx: Sender<UrMsg>,
+    logger: Logger,
 }
 
-fn remote_endpoint(_id: u64, endpoint: String, master: Sender<UrMsg>) -> std::io::Result<()> {
+fn remote_endpoint(
+    _id: u64,
+    endpoint: String,
+    master: Sender<UrMsg>,
+    logger: Logger,
+) -> std::io::Result<()> {
     loop {
         let sys = actix::System::new("ws-example");
         let endpoint1 = endpoint.clone();
         let master1 = master.clone();
+        // This clones the logger passed in from the function and makes it local for each loop
+        let logger = logger.clone();
         Arbiter::spawn(lazy(move || {
+            let err_logger = logger.clone();
             Client::new()
                 .ws(&format!("ws://{}/uring", endpoint1))
                 .connect()
-                .map_err(|e| {
-                    println!("Error: {}", e);
+                .map_err(move |e| {
+                    error!(err_logger, "Error: {}", e);
                     ()
                 })
                 .map(move |(_response, framed)| {
@@ -307,7 +339,7 @@ fn remote_endpoint(_id: u64, endpoint: String, master: Sender<UrMsg>) -> std::io
                     let addr = WsOfframpWorker::create(move |ctx| {
                         WsOfframpWorker::add_stream(stream, ctx);
                         WsOfframpWorker {
-                            //                            my_id: id,
+                            logger,
                             remote_id: 0,
                             tx: master2,
                             sink: SinkWrite::new(sink, ctx),
@@ -326,13 +358,16 @@ pub struct WsOfframpWorker {
     //    my_id: u64,
     remote_id: u64,
     tx: Sender<UrMsg>,
+    logger: Logger,
     sink: SinkWrite<SplitSink<Framed<BoxedSocket, AxCodec>>>,
 }
 
 impl WsOfframpWorker {
     fn hb(&self, ctx: &mut Context<Self>) {
         ctx.run_later(HEARTBEAT_INTERVAL, |act, ctx| {
-            act.sink.write(Message::Ping(String::from("Yay tremor!")));
+            act.sink
+                .write(Message::Ping(String::from("Snot badger!")))
+                .unwrap();
             act.hb(ctx);
         });
     }
@@ -347,8 +382,8 @@ impl Actor for WsOfframpWorker {
     }
 
     fn stopped(&mut self, _: &mut Context<Self>) {
-        self.tx.send(UrMsg::DownLocal(self.remote_id));
-        println!("system stopped");
+        self.tx.send(UrMsg::DownLocal(self.remote_id)).unwrap();
+        info!(self.logger, "system stopped");
         System::current().stop();
     }
 }
@@ -364,9 +399,11 @@ impl Handler<WsMessage> for WsOfframpWorker {
 
     fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self>) {
         match msg {
-            WsMessage::Msg(data) => eat_error!(self
-                .sink
-                .write(Message::Text(serde_json::to_string(&data).unwrap()))),
+            WsMessage::Msg(data) => eat_error!(
+                self.logger,
+                self.sink
+                    .write(Message::Text(serde_json::to_string(&data).unwrap()))
+            ),
         }
     }
 }
@@ -378,9 +415,19 @@ impl Handler<RaftMsg> for WsOfframpWorker {
     type Result = ();
 
     fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
-        //println!("Sending Raft message to (outgoing): {:?}", msg.0);
-        let data = msg.0.write_to_bytes().unwrap();
-        self.sink.write(Message::Binary(data.into())).unwrap();
+        // TODO FIXME Allow switching from pb <-> json by feature flag
+        let data: codec::json::Event = msg.0.clone().into();
+        /*
+        if data.kind != codec::json::EventType::Heartbeat
+            && data.kind != codec::json::EventType::HeartbeatResponse
+        {
+            info!(self.logger, "{:?} => {:?}", msg.0, &data);
+        }
+        */
+        let data = serde_json::to_string_pretty(&data);
+        self.sink
+            .write(Message::Binary(data.unwrap().into()))
+            .unwrap();
     }
 }
 
@@ -389,10 +436,10 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
     fn handle(&mut self, msg: Frame, ctx: &mut Context<Self>) {
         match msg {
             Frame::Close(_) => {
-                eat_error!(self.sink.write(Message::Close(None)));
+                eat_error!(self.logger, self.sink.write(Message::Close(None)));
             }
             Frame::Ping(data) => {
-                eat_error!(self.sink.write(Message::Pong(data)));
+                eat_error!(self.logger, self.sink.write(Message::Pong(data)));
             }
             Frame::Text(Some(data)) => {
                 let msg: HandshakeMsg = serde_json::from_slice(&data).unwrap();
@@ -410,12 +457,14 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
                 }
             }
             Frame::Text(None) => {
-                eat_error!(self.sink.write(Message::Text(String::new())));
+                eat_error!(self.logger, self.sink.write(Message::Text(String::new())));
             }
             Frame::Binary(Some(bin)) => {
-                let mut msg = RaftMessage::default();
-                msg.merge_from_bytes(&bin).unwrap();
-                //println!("recived raft message {:?}", msg);
+                let msg: codec::json::Event = serde_json::from_slice(&bin).unwrap();
+                let msg: RaftMessage = msg.into();
+                // TODO FIXME feature flag pb / json
+                // msg.merge_from_bytes(&bin).unwrap();
+                println!("received raft message {:?}", msg);
                 self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
             }
             Frame::Binary(None) => {
@@ -428,22 +477,25 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
 
     fn error(&mut self, error: WsProtocolError, _ctx: &mut Context<Self>) -> Running {
         match error {
-            _ => eat_error!(self.sink.write(Message::Close(Some(CloseReason {
-                code: CloseCode::Protocol,
-                description: None,
-            })))),
+            _ => eat_error!(
+                self.logger,
+                self.sink.write(Message::Close(Some(CloseReason {
+                    code: CloseCode::Protocol,
+                    description: None,
+                })))
+            ),
         };
         // Reconnect
         Running::Continue
     }
 
     fn started(&mut self, _ctx: &mut Context<Self>) {
-        println!("[WS Onramp] Connection established.");
+        info!(self.logger, "[WS Onramp] Connection established.");
     }
 
     fn finished(&mut self, ctx: &mut Context<Self>) {
-        println!("[WS Onramp] Connection terminated.");
-        eat_error!(self.sink.write(Message::Close(None)));
+        info!(self.logger, "[WS Onramp] Connection terminated.");
+        eat_error!(self.logger, self.sink.write(Message::Close(None)));
         ctx.stop()
     }
 }
@@ -498,7 +550,9 @@ fn loopy_thing(
                 Ok(UrMsg::GetNode(id, reply)) => {
                     info!(logger, "Getting node status"; "id" => id);
                     let g = node.raft_group.as_ref().unwrap();
-                    reply.send(g.raft.prs().configuration().contains(id));
+                    reply
+                        .send(g.raft.prs().configuration().contains(id))
+                        .unwrap();
                 }
                 Ok(UrMsg::AddNode(id, reply)) => {
                     info!(logger, "Adding node"; "id" => id);
@@ -513,16 +567,16 @@ fn loopy_thing(
 
                         // FIXME might not be the leader
                         node.proposals.push_back(proposal);
-                        reply.send(true);
+                        reply.send(true).unwrap();
                     } else {
-                        reply.send(false);
+                        reply.send(false).unwrap();
                     }
                 }
                 Ok(UrMsg::Get(key, reply)) => {
                     info!(logger, "Reading key"; "key" => &key);
                     let value = node.get_key(key);
                     info!(logger, "Found value"; "value" => &value);
-                    reply.send(value);
+                    reply.send(value).unwrap();
                 }
                 Ok(UrMsg::Post(key, value, reply)) => {
                     let pid = node.proposal_id;
@@ -540,13 +594,13 @@ fn loopy_thing(
                             WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
                         if let Some(remote) = node.local_mailboxes.get(&leader) {
                             node.pending_acks.insert(pid, reply.clone());
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
                             node.pending_acks.insert(pid, reply.clone());
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else {
                             error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()));
-                            reply.send(false);
+                            reply.send(false).unwrap();
                         }
                     }
                 }
@@ -558,7 +612,7 @@ fn loopy_thing(
                         }
                     }
                     if let Some(reply) = node.pending_acks.remove(&pid) {
-                        reply.send(success);
+                        reply.send(success).unwrap();
                     }
                 }
                 Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
@@ -570,9 +624,9 @@ fn loopy_thing(
                         let msg =
                             WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
                         if let Some(remote) = node.local_mailboxes.get(&leader) {
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else {
                             error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()))
                         }
@@ -600,7 +654,8 @@ fn loopy_thing(
                                 known_peers.insert(peer_id, peer.clone());
                                 let tx = tx.clone();
                                 let node_id = node.id;
-                                thread::spawn(move || remote_endpoint(node_id, peer, tx));
+                                let logger = logger.clone();
+                                thread::spawn(move || remote_endpoint(node_id, peer, tx, logger));
                             }
                         }
                     }
@@ -614,7 +669,8 @@ fn loopy_thing(
                             known_peers.insert(id, peer.clone());
                             let tx = tx.clone();
                             let node_id = node.id;
-                            thread::spawn(move || remote_endpoint(node_id, peer, tx));
+                            let logger = logger.clone();
+                            thread::spawn(move || remote_endpoint(node_id, peer, tx, logger));
                         }
                         endpoint
                             .clone()
@@ -687,7 +743,7 @@ fn loopy_thing(
         }
 
         // Handle readies from the raft.
-        node.on_ready();
+        node.on_ready().unwrap();
 
         // Check control signals from
         //        if check_signals(&rx_stop_clone) {
@@ -752,14 +808,20 @@ fn main() -> std::io::Result<()> {
     let id: u64 = matches.value_of("id").unwrap_or("1").parse().unwrap();
     let my_endpoint = endpoint.to_string();
     let tx1 = tx.clone();
-    thread::spawn(move || loopy_thing(id, my_endpoint, bootstrap, rx, tx1, logger));
+    let loop_logger = logger.clone();
+    thread::spawn(move || loopy_thing(id, my_endpoint, bootstrap, rx, tx1, loop_logger));
 
     for peer in peers {
+        let logger = logger.clone();
         let tx = tx.clone();
-        thread::spawn(move || remote_endpoint(id, peer, tx));
+        thread::spawn(move || remote_endpoint(id, peer, tx, logger));
     }
 
-    let node = Node { tx, id };
+    let node = Node {
+        tx,
+        id,
+        logger: logger.clone(),
+    };
 
     HttpServer::new(move || {
         App::new()
