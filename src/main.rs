@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[allow(unused)]
+
+
 pub mod errors;
 mod raft_node;
 mod storage;
+mod codec;
 use actix::io::SinkWrite;
 use actix::prelude::*;
 use actix_codec::Framed;
@@ -217,8 +221,11 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for UrSocket {
                 //ctx.text(text)
             }
             ws::Message::Binary(bin) => {
-                let mut msg = RaftMessage::default();
-                msg.merge_from_bytes(&bin).unwrap();
+                let msg: codec::json::Event = serde_json::from_slice(&bin).unwrap();
+                let msg: RaftMessage = msg.into();
+                // TODO FIXME feature flag pb / json
+                // let mut msg = RaftMessage::default();
+                // msg.merge_from_bytes(&bin).unwrap();
                 //println!("recived raft message {:?}", msg);
                 self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
             }
@@ -246,7 +253,11 @@ impl Handler<RaftMsg> for UrSocket {
     type Result = ();
     fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
         //println!("Sending Raft message to (incoming): {:?}", msg.0);
-        let data = msg.0.write_to_bytes().unwrap();
+        // let data = msg.0.write_to_bytes().unwrap();
+        // TODO FIXME Allow switching from pb <-> json by feature flag
+        let data: codec::json::Event = msg.0.into();
+        let data = serde_json::to_string_pretty(&data);
+        let data: bytes::Bytes = data.unwrap().into();
         ctx.binary(data);
     }
 }
@@ -379,8 +390,11 @@ impl Handler<RaftMsg> for WsOfframpWorker {
 
     fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
         //println!("Sending Raft message to (outgoing): {:?}", msg.0);
-        let data = msg.0.write_to_bytes().unwrap();
-        self.sink.write(Message::Binary(data.into())).unwrap();
+
+        // TODO FIXME Allow switching from pb <-> json by feature flag
+        let data: codec::json::Event = msg.0.into();
+        let data = serde_json::to_string_pretty(&data);
+        self.sink.write(Message::Binary(data.unwrap().into())).unwrap();
     }
 }
 
@@ -413,10 +427,13 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
                 eat_error!(self.sink.write(Message::Text(String::new())));
             }
             Frame::Binary(Some(bin)) => {
-                let mut msg = RaftMessage::default();
-                msg.merge_from_bytes(&bin).unwrap();
+                let msg: codec::json::Event = serde_json::from_slice(&bin).unwrap();
+                let msg: RaftMessage = msg.into();
+                // TODO FIXME feature flag pb / json
+                // msg.merge_from_bytes(&bin).unwrap();
                 //println!("recived raft message {:?}", msg);
                 self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
+
             }
             Frame::Binary(None) => {
                 //eat_error!(self.2.write(Message::Binary(Bytes::new())));
