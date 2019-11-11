@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize,Serialize};
 use raft::eraftpb;
+use serde::{Deserialize, Serialize};
 
 pub type NodeId = u64;
 
@@ -53,7 +53,7 @@ impl From<eraftpb::MessageType> for EventType {
             MessageType::MsgAppend => EventType::Append,
             MessageType::MsgAppendResponse => EventType::AppendResponse,
             MessageType::MsgRequestVote => EventType::RequestVote,
-            MessageType::MsgRequestVoteResponse => EventType::RequestPreVoteResponse,
+            MessageType::MsgRequestVoteResponse => EventType::RequestVoteResponse,
             MessageType::MsgSnapshot => EventType::Snapshot,
             MessageType::MsgHeartbeat => EventType::Heartbeat,
             MessageType::MsgHeartbeatResponse => EventType::HeartbeatResponse,
@@ -80,7 +80,7 @@ impl Into<eraftpb::MessageType> for EventType {
             EventType::Append => MessageType::MsgAppend,
             EventType::AppendResponse => MessageType::MsgAppendResponse,
             EventType::RequestVote => MessageType::MsgRequestVote,
-            EventType::RequestVoteResponse => MessageType::MsgRequestPreVoteResponse,
+            EventType::RequestVoteResponse => MessageType::MsgRequestVoteResponse,
             EventType::Snapshot => MessageType::MsgSnapshot,
             EventType::Heartbeat => MessageType::MsgHeartbeat,
             EventType::HeartbeatResponse => MessageType::MsgHeartbeatResponse,
@@ -174,7 +174,7 @@ impl From<eraftpb::Snapshot> for Snapshot {
             meta: match other.metadata.into_option() {
                 Some(v) => Some(v.into()),
                 None => None,
-            }
+            },
         }
     }
 }
@@ -208,7 +208,7 @@ impl From<eraftpb::SnapshotMetadata> for SnapshotMetadata {
             state: match other.conf_state.into_option() {
                 Some(value) => Some(value.into()),
                 None => None,
-            }
+            },
         }
     }
 }
@@ -229,7 +229,7 @@ impl Into<eraftpb::SnapshotMetadata> for SnapshotMetadata {
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct Event {
-    kind: EventType,
+    pub(crate) kind: EventType,
     term: u64,
     index: u64,
     to: NodeId,
@@ -287,11 +287,12 @@ impl Into<eraftpb::Message> for Event {
         entry.reject = self.reject;
         entry.reject_hint = self.reject_hint;
         entry.context = self.context;
-        entry.entries = RepeatedField::<eraftpb::Entry>::from_vec(self.entries.iter().map(|e| e.into()).collect());
+        entry.entries = RepeatedField::<eraftpb::Entry>::from_vec(
+            self.entries.iter().map(|e| e.into()).collect(),
+        );
         entry
     }
 }
-
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Default)]
 pub struct HardState {
@@ -404,7 +405,7 @@ pub struct StateChangeSingle {
 pub enum StateChangeTransition {
     Auto,
     Implicit,
-    Explicit
+    Explicit,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
@@ -418,7 +419,7 @@ pub struct StateChangeV2 {
 mod tests {
     use super::*;
 
-    #[derive(Debug,Default)]
+    #[derive(Debug, Default)]
     struct TestError {}
     impl std::fmt::Display for TestError {
         fn fmt(&self, _fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -426,8 +427,7 @@ mod tests {
             Ok(())
         }
     }
-    impl std::error::Error for TestError {
-    }
+    impl std::error::Error for TestError {}
 
     macro_rules! assert_symmetric {
         ($t:ident, $c:expr) => {
@@ -439,11 +439,11 @@ mod tests {
                 }
                 let _ = s.to_owned();
             }
-        }
+        };
     }
 
     #[test]
-    fn test_entry_pb_json_conversion() -> Result<(),TestError> {
+    fn test_entry_pb_json_conversion() -> Result<(), TestError> {
         let mut pb = eraftpb::Entry::default();
         pb.term = 1;
         pb.index = 2;
@@ -464,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raft_model_serde_symmetric_and_defaults() -> Result<(),TestError> {
+    fn test_raft_model_serde_symmetric_and_defaults() -> Result<(), TestError> {
         let candidate = HardState::default();
 
         assert_eq!(0, candidate.term);
@@ -473,7 +473,10 @@ mod tests {
 
         assert_symmetric!(HardState, &candidate);
 
-        println!("{}", serde_json::to_string_pretty(&candidate).expect("not ok"));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&candidate).expect("not ok")
+        );
 
         Ok(())
     }

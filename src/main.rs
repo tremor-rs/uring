@@ -132,7 +132,10 @@ fn get_node(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::GetNode(params.id, tx)).unwrap();
+    srv.get_ref()
+        .tx
+        .send(UrMsg::GetNode(params.id, tx))
+        .unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -147,7 +150,10 @@ fn post_node(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::AddNode(params.id, tx)).unwrap();
+    srv.get_ref()
+        .tx
+        .send(UrMsg::AddNode(params.id, tx))
+        .unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -251,8 +257,14 @@ impl Handler<RaftMsg> for UrSocket {
     fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
         // let data = msg.0.write_to_bytes().unwrap();
         // TODO FIXME Allow switching from pb <-> json by feature flag
-        let data: codec::json::Event = msg.0.into();
-        println!("Sending Raft message to (incoming): {:?}", data);
+        let data: codec::json::Event = msg.0.clone().into();
+        /*
+        if data.kind != codec::json::EventType::Heartbeat
+            && data.kind != codec::json::EventType::HeartbeatResponse
+        {
+            info!(self.node.logger, "{:?} => {:?}", msg.0, &data);
+        }
+        */
         let data = serde_json::to_string_pretty(&data);
         let data: bytes::Bytes = data.unwrap().into();
         ctx.binary(data);
@@ -353,7 +365,9 @@ pub struct WsOfframpWorker {
 impl WsOfframpWorker {
     fn hb(&self, ctx: &mut Context<Self>) {
         ctx.run_later(HEARTBEAT_INTERVAL, |act, ctx| {
-            act.sink.write(Message::Ping(String::from("Snot badger!"))).unwrap();
+            act.sink
+                .write(Message::Ping(String::from("Snot badger!")))
+                .unwrap();
             act.hb(ctx);
         });
     }
@@ -401,10 +415,15 @@ impl Handler<RaftMsg> for WsOfframpWorker {
     type Result = ();
 
     fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
-
         // TODO FIXME Allow switching from pb <-> json by feature flag
-        let data: codec::json::Event = msg.0.into();
-        println!("Sending Raft message to (outgoing): {:?}", data);
+        let data: codec::json::Event = msg.0.clone().into();
+        /*
+        if data.kind != codec::json::EventType::Heartbeat
+            && data.kind != codec::json::EventType::HeartbeatResponse
+        {
+            info!(self.logger, "{:?} => {:?}", msg.0, &data);
+        }
+        */
         let data = serde_json::to_string_pretty(&data);
         self.sink
             .write(Message::Binary(data.unwrap().into()))
@@ -531,7 +550,9 @@ fn loopy_thing(
                 Ok(UrMsg::GetNode(id, reply)) => {
                     info!(logger, "Getting node status"; "id" => id);
                     let g = node.raft_group.as_ref().unwrap();
-                    reply.send(g.raft.prs().configuration().contains(id)).unwrap();
+                    reply
+                        .send(g.raft.prs().configuration().contains(id))
+                        .unwrap();
                 }
                 Ok(UrMsg::AddNode(id, reply)) => {
                     info!(logger, "Adding node"; "id" => id);
