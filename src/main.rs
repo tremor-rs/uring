@@ -104,7 +104,7 @@ fn post(
         .tx
         .send(UrMsg::Put(params.id.clone(), params.id.clone(), tx));
     if rx.recv().unwrap() {
-        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
+        Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
     }
