@@ -314,11 +314,12 @@ fn remote_endpoint(
         // This clones the logger passed in from the function and makes it local for each loop
         let logger = logger.clone();
         Arbiter::spawn(lazy(move || {
+            let err_logger = logger.clone();
             Client::new()
                 .ws(&format!("ws://{}/uring", endpoint1))
                 .connect()
-                .map_err(|e| {
-                    println!("Error: {}", e);
+                .map_err(move |e| {
+                    error!(err_logger, "Error: {}", e);
                     ()
                 })
                 .map(move |(_response, framed)| {
@@ -369,7 +370,7 @@ impl Actor for WsOfframpWorker {
 
     fn stopped(&mut self, _: &mut Context<Self>) {
         self.tx.send(UrMsg::DownLocal(self.remote_id));
-        println!("system stopped");
+        info!(self.logger, "system stopped");
         System::current().stop();
     }
 }
@@ -471,11 +472,11 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
     }
 
     fn started(&mut self, _ctx: &mut Context<Self>) {
-        println!("[WS Onramp] Connection established.");
+        info!(self.logger, "[WS Onramp] Connection established.");
     }
 
     fn finished(&mut self, ctx: &mut Context<Self>) {
-        println!("[WS Onramp] Connection terminated.");
+        info!(self.logger, "[WS Onramp] Connection terminated.");
         eat_error!(self.logger, self.sink.write(Message::Close(None)));
         ctx.stop()
     }
