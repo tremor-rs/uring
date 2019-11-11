@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod codec;
 #[allow(unused)]
-
-
 pub mod errors;
 mod raft_node;
 mod storage;
-mod codec;
 use actix::io::SinkWrite;
 use actix::prelude::*;
 use actix_codec::Framed;
@@ -58,9 +56,9 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 macro_rules! eat_error {
-    ($e:expr) => {
+    ($l:expr, $e:expr) => {
         if let Err(e) = $e {
-            println!("[WS Error] {}", e)
+            error!($l, "[WS Error] {}", e)
         }
     };
 }
@@ -279,7 +277,10 @@ impl UrSocket {
             // check client heartbeats
             if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
                 // heartbeat timed out
-                println!("Websocket Client heartbeat failed, disconnecting!");
+                error!(
+                    act.node.logger,
+                    "Websocket Client heartbeat failed, disconnecting!"
+                );
 
                 // stop actor
                 ctx.stop();
@@ -297,13 +298,21 @@ impl UrSocket {
 struct Node {
     id: u64,
     tx: Sender<UrMsg>,
+    logger: Logger,
 }
 
-fn remote_endpoint(_id: u64, endpoint: String, master: Sender<UrMsg>) -> std::io::Result<()> {
+fn remote_endpoint(
+    _id: u64,
+    endpoint: String,
+    master: Sender<UrMsg>,
+    logger: Logger,
+) -> std::io::Result<()> {
     loop {
         let sys = actix::System::new("ws-example");
         let endpoint1 = endpoint.clone();
         let master1 = master.clone();
+        // This clones the logger passed in from the function and makes it local for each loop
+        let logger = logger.clone();
         Arbiter::spawn(lazy(move || {
             Client::new()
                 .ws(&format!("ws://{}/uring", endpoint1))
@@ -318,7 +327,7 @@ fn remote_endpoint(_id: u64, endpoint: String, master: Sender<UrMsg>) -> std::io
                     let addr = WsOfframpWorker::create(move |ctx| {
                         WsOfframpWorker::add_stream(stream, ctx);
                         WsOfframpWorker {
-                            //                            my_id: id,
+                            logger,
                             remote_id: 0,
                             tx: master2,
                             sink: SinkWrite::new(sink, ctx),
@@ -337,6 +346,7 @@ pub struct WsOfframpWorker {
     //    my_id: u64,
     remote_id: u64,
     tx: Sender<UrMsg>,
+    logger: Logger,
     sink: SinkWrite<SplitSink<Framed<BoxedSocket, AxCodec>>>,
 }
 
@@ -375,9 +385,11 @@ impl Handler<WsMessage> for WsOfframpWorker {
 
     fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self>) {
         match msg {
-            WsMessage::Msg(data) => eat_error!(self
-                .sink
-                .write(Message::Text(serde_json::to_string(&data).unwrap()))),
+            WsMessage::Msg(data) => eat_error!(
+                self.logger,
+                self.sink
+                    .write(Message::Text(serde_json::to_string(&data).unwrap()))
+            ),
         }
     }
 }
@@ -394,7 +406,9 @@ impl Handler<RaftMsg> for WsOfframpWorker {
         // TODO FIXME Allow switching from pb <-> json by feature flag
         let data: codec::json::Event = msg.0.into();
         let data = serde_json::to_string_pretty(&data);
-        self.sink.write(Message::Binary(data.unwrap().into())).unwrap();
+        self.sink
+            .write(Message::Binary(data.unwrap().into()))
+            .unwrap();
     }
 }
 
@@ -403,10 +417,10 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
     fn handle(&mut self, msg: Frame, ctx: &mut Context<Self>) {
         match msg {
             Frame::Close(_) => {
-                eat_error!(self.sink.write(Message::Close(None)));
+                eat_error!(self.logger, self.sink.write(Message::Close(None)));
             }
             Frame::Ping(data) => {
-                eat_error!(self.sink.write(Message::Pong(data)));
+                eat_error!(self.logger, self.sink.write(Message::Pong(data)));
             }
             Frame::Text(Some(data)) => {
                 let msg: HandshakeMsg = serde_json::from_slice(&data).unwrap();
@@ -424,7 +438,7 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
                 }
             }
             Frame::Text(None) => {
-                eat_error!(self.sink.write(Message::Text(String::new())));
+                eat_error!(self.logger, self.sink.write(Message::Text(String::new())));
             }
             Frame::Binary(Some(bin)) => {
                 let msg: codec::json::Event = serde_json::from_slice(&bin).unwrap();
@@ -433,7 +447,6 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
                 // msg.merge_from_bytes(&bin).unwrap();
                 //println!("recived raft message {:?}", msg);
                 self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
-
             }
             Frame::Binary(None) => {
                 //eat_error!(self.2.write(Message::Binary(Bytes::new())));
@@ -445,10 +458,13 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
 
     fn error(&mut self, error: WsProtocolError, _ctx: &mut Context<Self>) -> Running {
         match error {
-            _ => eat_error!(self.sink.write(Message::Close(Some(CloseReason {
-                code: CloseCode::Protocol,
-                description: None,
-            })))),
+            _ => eat_error!(
+                self.logger,
+                self.sink.write(Message::Close(Some(CloseReason {
+                    code: CloseCode::Protocol,
+                    description: None,
+                })))
+            ),
         };
         // Reconnect
         Running::Continue
@@ -460,7 +476,7 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
 
     fn finished(&mut self, ctx: &mut Context<Self>) {
         println!("[WS Onramp] Connection terminated.");
-        eat_error!(self.sink.write(Message::Close(None)));
+        eat_error!(self.logger, self.sink.write(Message::Close(None)));
         ctx.stop()
     }
 }
@@ -617,7 +633,8 @@ fn loopy_thing(
                                 known_peers.insert(peer_id, peer.clone());
                                 let tx = tx.clone();
                                 let node_id = node.id;
-                                thread::spawn(move || remote_endpoint(node_id, peer, tx));
+                                let logger = logger.clone();
+                                thread::spawn(move || remote_endpoint(node_id, peer, tx, logger));
                             }
                         }
                     }
@@ -631,7 +648,8 @@ fn loopy_thing(
                             known_peers.insert(id, peer.clone());
                             let tx = tx.clone();
                             let node_id = node.id;
-                            thread::spawn(move || remote_endpoint(node_id, peer, tx));
+                            let logger = logger.clone();
+                            thread::spawn(move || remote_endpoint(node_id, peer, tx, logger));
                         }
                         endpoint
                             .clone()
@@ -769,14 +787,20 @@ fn main() -> std::io::Result<()> {
     let id: u64 = matches.value_of("id").unwrap_or("1").parse().unwrap();
     let my_endpoint = endpoint.to_string();
     let tx1 = tx.clone();
-    thread::spawn(move || loopy_thing(id, my_endpoint, bootstrap, rx, tx1, logger));
+    let loop_logger = logger.clone();
+    thread::spawn(move || loopy_thing(id, my_endpoint, bootstrap, rx, tx1, loop_logger));
 
     for peer in peers {
+        let logger = logger.clone();
         let tx = tx.clone();
-        thread::spawn(move || remote_endpoint(id, peer, tx));
+        thread::spawn(move || remote_endpoint(id, peer, tx, logger));
     }
 
-    let node = Node { tx, id };
+    let node = Node {
+        tx,
+        id,
+        logger: logger.clone(),
+    };
 
     HttpServer::new(move || {
         App::new()
