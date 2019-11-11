@@ -71,12 +71,16 @@ fn uring_index(
     res
 }
 
-struct GetReq(String, Sender<String>);
-
 #[derive(Deserialize)]
 pub struct GetParams {
     id: String,
 }
+#[derive(Deserialize, Serialize)]
+pub struct KV {
+    key: String,
+    value: String,
+}
+
 /// do websocket handshake and start `UrSocket` actor
 fn get(
     _r: HttpRequest,
@@ -84,25 +88,32 @@ fn get(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::Get(params.id.clone(), tx));
-    if let Some(res) = rx.recv().unwrap() {
-        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()).set_body(res.into()))
+    let key = params.id.clone();
+    srv.get_ref().tx.send(UrMsg::Get(key.clone(), tx));
+    if let Some(value) = rx.recv().unwrap() {
+        Ok(HttpResponse::Ok().json(KV { key, value }))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
     }
+}
+
+#[derive(Deserialize)]
+pub struct PostBody {
+    value: String,
 }
 
 /// do websocket handshake and start `UrSocket` actor
 fn post(
     _r: HttpRequest,
     params: web::Path<GetParams>,
-    _body: web::Payload,
+    body: web::Json<PostBody>,
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
     srv.get_ref()
         .tx
-        .send(UrMsg::Put(params.id.clone(), params.id.clone(), tx));
+        .send(UrMsg::Post(params.id.clone(), body.value.clone(), tx))
+        .unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
     } else {
@@ -135,7 +146,7 @@ fn post_node(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::PutNode(params.id, tx));
+    srv.get_ref().tx.send(UrMsg::AddNode(params.id, tx));
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -455,9 +466,9 @@ pub enum UrMsg {
     ForwardProposal(u64, u64, String, String),
     RaftMsg(RaftMessage),
     Get(String, Sender<Option<String>>),
-    Put(String, String, Sender<bool>),
+    Post(String, String, Sender<bool>),
     GetNode(u64, Sender<bool>),
-    PutNode(u64, Sender<bool>),
+    AddNode(u64, Sender<bool>),
 }
 
 fn loopy_thing(
@@ -489,7 +500,7 @@ fn loopy_thing(
                     let g = node.raft_group.as_ref().unwrap();
                     reply.send(g.raft.prs().configuration().contains(id));
                 }
-                Ok(UrMsg::PutNode(id, reply)) => {
+                Ok(UrMsg::AddNode(id, reply)) => {
                     info!(logger, "Adding node"; "id" => id);
                     let g = node.raft_group.as_ref().unwrap();
                     if node.is_leader() && !g.raft.prs().configuration().contains(id) {
@@ -513,7 +524,7 @@ fn loopy_thing(
                     info!(logger, "Found value"; "value" => &value);
                     reply.send(value);
                 }
-                Ok(UrMsg::Put(key, value, reply)) => {
+                Ok(UrMsg::Post(key, value, reply)) => {
                     let pid = node.proposal_id;
                     node.proposal_id += 1;
                     let from = node.id;

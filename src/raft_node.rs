@@ -356,10 +356,8 @@ impl RaftNode {
                 } else {
                     // For normal proposals, extract the key-value pair and then
                     // insert them into the kv engine.
-                    let data = std::str::from_utf8(&entry.data).unwrap();
-                    let reg = Regex::new("put (.+) (.+)").unwrap();
-                    if let Some(caps) = reg.captures(&data) {
-                        self.put_key(caps[1].to_string(), caps[2].to_string());
+                    if let Ok(kv) = serde_json::from_slice::<KV>(&entry.data) {
+                        self.put_key(kv.key, kv.value);
                     }
                 }
                 if self.raft_group.as_ref().unwrap().raft.state == StateRole::Leader {
@@ -450,7 +448,11 @@ pub(crate) fn propose_and_check_failed_proposal(
 ) -> Result<bool> {
     let last_index1 = raft_group.raft.raft_log.last_index() + 1;
     if let Some((ref key, ref value)) = proposal.normal {
-        let data = format!("put {} {}", key, value).into_bytes();
+        let data = serde_json::to_vec(&KV {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .unwrap();
         raft_group.propose(vec![], data)?;
     } else if let Some(ref cc) = proposal.conf_change {
         raft_group.propose_conf_change(vec![], cc.clone())?;

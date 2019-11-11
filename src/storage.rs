@@ -14,6 +14,7 @@
 
 // inspired by https://github.com/LucioFranco/kv/blob/master/src/storage.rs
 
+use crate::KV;
 use protobuf::Message;
 use raft::eraftpb::{ConfState, HardState};
 use raft::eraftpb::{Entry, Snapshot};
@@ -197,11 +198,11 @@ impl URRocksStorage {
                 k < &HIGH_DATA[..]
             })
             .map(|(k, v)| {
-                let mut s = String::from("put ");
-                s.push_str(std::str::from_utf8(&k[8..]).unwrap());
-                s.push(' ');
-                s.push_str(std::str::from_utf8(&v).unwrap());
-                s
+                serde_json::to_string(&KV {
+                    key: std::str::from_utf8(&k[8..]).unwrap().into(),
+                    value: std::str::from_utf8(&v).unwrap().into(),
+                })
+                .unwrap()
             })
             .collect::<Vec<String>>()
             .join("\n")
@@ -209,14 +210,11 @@ impl URRocksStorage {
     }
 
     pub fn apply_data_snapshot(&self, data: Vec<u8>) {
-        let data = String::from_utf8(data).unwrap();
         self.clear_data();
 
-        let reg = Regex::new("put (.+) (.+)").unwrap();
-
-        for kv in data.split('\n') {
-            if let Some(caps) = reg.captures(&kv) {
-                self.put(&caps[1], caps[2].to_string());
+        for kv in data.split(|c| *c == b'\n') {
+            if let Ok(kv) = serde_json::from_slice::<KV>(&kv) {
+                self.put(&kv.key, kv.value);
             }
         }
     }
