@@ -17,10 +17,8 @@ use crate::storage::*;
 use protobuf::Message as PBMessage;
 use raft::eraftpb::ConfState;
 use raft::eraftpb::Message;
-use raft::storage::Storage as RaftStorage;
 use raft::{prelude::*, StateRole};
 use raft::{Error, Result};
-use regex::Regex;
 use slog::Logger;
 use std::collections::VecDeque;
 use std::fmt;
@@ -367,7 +365,7 @@ impl RaftNode {
                         if proposal.proposer == self.id {
                             info!(self.logger, "Handling proposal(local)"; "proposal-id" => proposal.id);
                             if let Some(reply) = self.pending_acks.remove(&proposal.id) {
-                                reply.send(true);
+                                reply.send(true).unwrap();
                             }
                             self.pending_proposals.remove(&proposal.id);
                         } else {

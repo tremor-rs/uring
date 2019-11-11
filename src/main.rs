@@ -36,7 +36,6 @@ use futures::{
     stream::{SplitSink, Stream},
     Future,
 };
-use protobuf::Message as PBMessage;
 use raft::eraftpb::Message as RaftMessage;
 use raft::{prelude::*, StateRole};
 use raft_node::*;
@@ -91,7 +90,7 @@ fn get(
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
     let key = params.id.clone();
-    srv.get_ref().tx.send(UrMsg::Get(key.clone(), tx));
+    srv.get_ref().tx.send(UrMsg::Get(key.clone(), tx)).unwrap();
     if let Some(value) = rx.recv().unwrap() {
         Ok(HttpResponse::Ok().json(KV { key, value }))
     } else {
@@ -133,7 +132,7 @@ fn get_node(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::GetNode(params.id, tx));
+    srv.get_ref().tx.send(UrMsg::GetNode(params.id, tx)).unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -148,7 +147,7 @@ fn post_node(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::AddNode(params.id, tx));
+    srv.get_ref().tx.send(UrMsg::AddNode(params.id, tx)).unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
     } else {
@@ -250,10 +249,10 @@ impl Handler<WsMessage> for UrSocket {
 impl Handler<RaftMsg> for UrSocket {
     type Result = ();
     fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
-        //println!("Sending Raft message to (incoming): {:?}", msg.0);
         // let data = msg.0.write_to_bytes().unwrap();
         // TODO FIXME Allow switching from pb <-> json by feature flag
         let data: codec::json::Event = msg.0.into();
+        println!("Sending Raft message to (incoming): {:?}", data);
         let data = serde_json::to_string_pretty(&data);
         let data: bytes::Bytes = data.unwrap().into();
         ctx.binary(data);
@@ -354,7 +353,7 @@ pub struct WsOfframpWorker {
 impl WsOfframpWorker {
     fn hb(&self, ctx: &mut Context<Self>) {
         ctx.run_later(HEARTBEAT_INTERVAL, |act, ctx| {
-            act.sink.write(Message::Ping(String::from("Yay tremor!")));
+            act.sink.write(Message::Ping(String::from("Snot badger!"))).unwrap();
             act.hb(ctx);
         });
     }
@@ -369,7 +368,7 @@ impl Actor for WsOfframpWorker {
     }
 
     fn stopped(&mut self, _: &mut Context<Self>) {
-        self.tx.send(UrMsg::DownLocal(self.remote_id));
+        self.tx.send(UrMsg::DownLocal(self.remote_id)).unwrap();
         info!(self.logger, "system stopped");
         System::current().stop();
     }
@@ -402,10 +401,10 @@ impl Handler<RaftMsg> for WsOfframpWorker {
     type Result = ();
 
     fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
-        //println!("Sending Raft message to (outgoing): {:?}", msg.0);
 
         // TODO FIXME Allow switching from pb <-> json by feature flag
         let data: codec::json::Event = msg.0.into();
+        println!("Sending Raft message to (outgoing): {:?}", data);
         let data = serde_json::to_string_pretty(&data);
         self.sink
             .write(Message::Binary(data.unwrap().into()))
@@ -446,7 +445,7 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
                 let msg: RaftMessage = msg.into();
                 // TODO FIXME feature flag pb / json
                 // msg.merge_from_bytes(&bin).unwrap();
-                //println!("recived raft message {:?}", msg);
+                println!("received raft message {:?}", msg);
                 self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
             }
             Frame::Binary(None) => {
@@ -532,7 +531,7 @@ fn loopy_thing(
                 Ok(UrMsg::GetNode(id, reply)) => {
                     info!(logger, "Getting node status"; "id" => id);
                     let g = node.raft_group.as_ref().unwrap();
-                    reply.send(g.raft.prs().configuration().contains(id));
+                    reply.send(g.raft.prs().configuration().contains(id)).unwrap();
                 }
                 Ok(UrMsg::AddNode(id, reply)) => {
                     info!(logger, "Adding node"; "id" => id);
@@ -547,16 +546,16 @@ fn loopy_thing(
 
                         // FIXME might not be the leader
                         node.proposals.push_back(proposal);
-                        reply.send(true);
+                        reply.send(true).unwrap();
                     } else {
-                        reply.send(false);
+                        reply.send(false).unwrap();
                     }
                 }
                 Ok(UrMsg::Get(key, reply)) => {
                     info!(logger, "Reading key"; "key" => &key);
                     let value = node.get_key(key);
                     info!(logger, "Found value"; "value" => &value);
-                    reply.send(value);
+                    reply.send(value).unwrap();
                 }
                 Ok(UrMsg::Post(key, value, reply)) => {
                     let pid = node.proposal_id;
@@ -574,13 +573,13 @@ fn loopy_thing(
                             WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
                         if let Some(remote) = node.local_mailboxes.get(&leader) {
                             node.pending_acks.insert(pid, reply.clone());
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
                             node.pending_acks.insert(pid, reply.clone());
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else {
                             error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()));
-                            reply.send(false);
+                            reply.send(false).unwrap();
                         }
                     }
                 }
@@ -592,7 +591,7 @@ fn loopy_thing(
                         }
                     }
                     if let Some(reply) = node.pending_acks.remove(&pid) {
-                        reply.send(success);
+                        reply.send(success).unwrap();
                     }
                 }
                 Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
@@ -604,9 +603,9 @@ fn loopy_thing(
                         let msg =
                             WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
                         if let Some(remote) = node.local_mailboxes.get(&leader) {
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
-                            remote.send(msg).wait();
+                            remote.send(msg).wait().unwrap();
                         } else {
                             error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()))
                         }
@@ -723,7 +722,7 @@ fn loopy_thing(
         }
 
         // Handle readies from the raft.
-        node.on_ready();
+        node.on_ready().unwrap();
 
         // Check control signals from
         //        if check_signals(&rx_stop_clone) {
