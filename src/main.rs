@@ -60,7 +60,7 @@ pub struct KV {
     value: String,
 }
 
-fn loopy_thing<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logger) {
+fn raft_loop<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logger) {
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut t1 = Instant::now();
     let mut last_state = StateRole::PreCandidate;
@@ -74,7 +74,7 @@ fn loopy_thing<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logg
     loop {
         thread::sleep(Duration::from_millis(10));
 
-        let this_state = node.role().clone();
+        let this_state = node.role();
 
         if t1.elapsed() >= Duration::from_secs(10) {
             // Tick the raft.
@@ -82,9 +82,9 @@ fn loopy_thing<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logg
             t1 = Instant::now();
         }
 
-        if this_state != last_state {
+        if this_state != &last_state {
             debug!(&logger, "State transition"; "last-state" => format!("{:?}", last_state), "next-state" => format!("{:?}", this_state));
-            last_state = this_state
+            last_state = this_state.clone()
         }
 
         // Handle readies from the raft.
@@ -147,7 +147,7 @@ fn main() -> std::io::Result<()> {
     let loop_logger = logger.clone();
     let (handle, network) = ws::Network::new(&logger, id, endpoint, peers);
 
-    thread::spawn(move || loopy_thing(id, bootstrap, network, loop_logger));
+    thread::spawn(move || raft_loop(id, bootstrap, network, loop_logger));
 
     handle.join().unwrap()
 }

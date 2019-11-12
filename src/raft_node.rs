@@ -90,16 +90,17 @@ where
     Storage: storage::Storage,
     Network: network::Network,
 {
-    pub logger: Logger,
+    logger: Logger,
     // None if the raft is not initialized.
-    pub id: NodeId,
-    pub raft_group: Option<RawNode<Storage>>,
-    pub network: Network,
-    pub proposals: VecDeque<Proposal>,
-    pub pending_proposals: HashMap<u64, Proposal>,
-    pub pending_acks: HashMap<u64, Sender<bool>>,
-    pub proposal_id: u64,
-    pub timer: Instant,
+    id: NodeId,
+    raft_group: Option<RawNode<Storage>>,
+    network: Network,
+    proposals: VecDeque<Proposal>,
+    pending_proposals: HashMap<u64, Proposal>,
+    pending_acks: HashMap<u64, Sender<bool>>,
+    proposal_id: u64,
+    timer: Instant,
+    tick_duration: Duration,
 }
 
 impl<Storage, Network> RaftNode<Storage, Network>
@@ -169,7 +170,7 @@ where
             return Ok(());
         }
 
-        if self.timer.elapsed() >= Duration::from_millis(100) {
+        if self.timer.elapsed() >= self.tick_duration {
             // Tick the raft.
 
             self.raft_group.as_mut().unwrap().tick();
@@ -205,6 +206,7 @@ where
                 })
         }
     }
+
     pub fn add_node(&mut self, id: NodeId) -> bool {
         if self.is_leader() && !self.node_known(id) {
             let mut conf_change = ConfChange::default();
@@ -320,7 +322,12 @@ where
             pending_acks: HashMap::new(),
             proposal_id: 0,
             timer: Instant::now(),
+            tick_duration: Duration::from_millis(100),
         }
+    }
+
+    pub fn set_raft_tick_duration(&mut self, d: Duration) {
+        self.tick_duration = d;
     }
 
     // Create a raft follower.
@@ -342,6 +349,7 @@ where
             pending_acks: HashMap::new(),
             proposal_id: 0,
             timer: Instant::now(),
+            tick_duration: Duration::from_millis(100),
         }
     }
 
