@@ -15,14 +15,15 @@
 # limitations under the License.
 
 import sys
+import time
 import contrib
 import simplejson
+import requests
 
 config_file = 'contrib/3u.json'
 
 #
 # Simplistic script to spin up a 3 node raft cluster on localhost
-# - No registration/join events
 # - Resets storage as a side-effect
 # - Press any key to shutdown server
 #
@@ -62,12 +63,17 @@ class Cluster():
 
 
             ports = contrib.rotate(ports)
- 
+
             print('{}: {}'.format(id, port))
+
+    def adjoin(self):
+        time.sleep(5)
+        requests.post("http://localhost:8081/node/2")
+        requests.post("http://localhost:8081/node/3")
 
 cluster = Cluster()
 cluster.configure(config_file)
-print('{}'.format(cluster.clients))
+cluster.adjoin()
 
 for line in sys.stdin.readline():
     print(line)
