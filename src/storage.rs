@@ -18,91 +18,23 @@ use crate::KV;
 use protobuf::Message;
 use raft::eraftpb::{ConfState, HardState};
 use raft::eraftpb::{Entry, Snapshot};
-use raft::storage::{MemStorage, RaftState, Storage as ReadStorage};
+use raft::storage::RaftState;
+pub use raft::storage::Storage as ReadStorage;
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
 use std::borrow::Borrow;
+
+pub trait Storage: WriteStorage + ReadStorage {
+    fn new_with_conf_state(id: u64, state: ConfState) -> Self;
+    fn new(id: u64) -> Self;
+}
 /// The missing storage trait from raft-rs ...
-pub trait WriteStorage: ReadStorage {
+pub trait WriteStorage {
     fn append(&self, entries: &[Entry]) -> RaftResult<()>;
     fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()>;
     fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()>;
     fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()>;
-}
-
-/*
-pub trait Storable: ?Sized {
-    fn encode(self) -> Bytes;
-    fn decode(bytes: Bytes) -> Option<Self>;
-}
-*/
-#[derive(Default)]
-pub struct URMemStorage {
-    backend: MemStorage,
-}
-
-#[allow(dead_code)]
-impl URMemStorage {
-    pub fn new_with_conf_state(_id: u64, state: ConfState) -> Self {
-        Self {
-            backend: MemStorage::new_with_conf_state(state),
-        }
-    }
-    pub fn new(_id: u64) -> Self {
-        Self {
-            backend: MemStorage::new(),
-        }
-    }
-}
-
-impl WriteStorage for URMemStorage {
-    fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()> {
-        self.backend.wl().apply_snapshot(snapshot)
-    }
-
-    fn append(&self, entries: &[Entry]) -> RaftResult<()> {
-        self.backend.wl().append(entries)
-    }
-
-    fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()> {
-        self.backend.wl().set_conf_state(cs);
-        Ok(())
-    }
-
-    fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()> {
-        let mut s = self.backend.wl();
-        s.mut_hard_state().commit = commit;
-        s.mut_hard_state().term = term;
-        Ok(())
-    }
-}
-
-impl ReadStorage for URMemStorage {
-    fn first_index(&self) -> RaftResult<u64> {
-        self.backend.first_index()
-    }
-
-    fn last_index(&self) -> RaftResult<u64> {
-        self.backend.last_index()
-    }
-
-    fn term(&self, idx: u64) -> RaftResult<u64> {
-        self.backend.term(idx)
-    }
-
-    fn initial_state(&self) -> RaftResult<RaftState> {
-        self.backend.initial_state()
-    }
-    fn entries(
-        &self,
-        low: u64,
-        high: u64,
-        max_size: impl Into<Option<u64>>,
-    ) -> RaftResult<Vec<Entry>> {
-        self.backend.entries(low, high, max_size)
-    }
-    fn snapshot(&self, request_index: u64) -> RaftResult<Snapshot> {
-        self.backend.snapshot(request_index)
-    }
+    fn get(&self, key: &[u8]) -> Option<Vec<u8>>;
+    fn put(&self, key: &[u8], value: &[u8]);
 }
 
 use rocksdb::{Direction, IteratorMode, WriteBatch, DB};
@@ -116,22 +48,24 @@ pub struct URRocksStorage {
     conf_state: Option<ConfState>,
 }
 
-impl URRocksStorage {
-    pub fn new_with_conf_state(id: u64, state: ConfState) -> Self {
+impl Storage for URRocksStorage {
+    fn new_with_conf_state(id: u64, state: ConfState) -> Self {
         let mut db = Self::new(id);
 
         db.set_conf_state(state).unwrap();
         db.set_hard_state(1, 1).unwrap();
         db
     }
-    pub fn new(id: u64) -> Self {
+    fn new(id: u64) -> Self {
         let backend = DB::open_default(&format!("raft-rocks-{}", id)).unwrap();
         Self {
             backend,
             conf_state: None,
         }
     }
+}
 
+impl URRocksStorage {
     fn get_hard_state(&self) -> HardState {
         let mut hs = HardState::new();
         if let Ok(Some(data)) = self.backend.get(&HARD_STATE) {
@@ -170,23 +104,9 @@ impl URRocksStorage {
             .iterator(IteratorMode::From(&LOW_DATA, Direction::Forward))
             .take_while(|(k, _)| {
                 let k: &[u8] = k.borrow();
-                // NOTE: we got to use < here since we don't have a fixed "last key" for data as it's not fixed size
-                // HIGH_DATA is technically LOW of the next segment
-                k < &HIGH_DATA[..]
+                k <= &HIGH_DATA[..]
             })
             .for_each(|(k, _)| self.backend.delete(&k).unwrap());
-    }
-
-    pub fn get(&self, key: &str) -> Option<String> {
-        let key = make_data_key(key);
-        self.backend
-            .get(key)
-            .unwrap()
-            .map(|v| String::from_utf8_lossy(&v).to_string())
-    }
-    pub fn put(&self, key: &str, value: String) {
-        let key = make_data_key(key);
-        self.backend.put(key, value).unwrap();
     }
 
     pub fn data_snapshot(&self) -> Vec<u8> {
@@ -194,12 +114,12 @@ impl URRocksStorage {
             .iterator(IteratorMode::From(&LOW_DATA, Direction::Forward))
             .take_while(|(k, _)| {
                 let k: &[u8] = k.borrow();
-                k < &HIGH_DATA[..]
+                k <= &HIGH_DATA[..]
             })
             .map(|(k, v)| {
                 serde_json::to_string(&KV {
-                    key: std::str::from_utf8(&k[8..]).unwrap().into(),
-                    value: std::str::from_utf8(&v).unwrap().into(),
+                    key: base64::encode(&k),
+                    value: base64::encode(&v),
                 })
                 .unwrap()
             })
@@ -213,13 +133,23 @@ impl URRocksStorage {
 
         for kv in data.split(|c| *c == b'\n') {
             if let Ok(kv) = serde_json::from_slice::<KV>(&kv) {
-                self.put(&kv.key, kv.value);
+                let k = base64::decode(&kv.key).unwrap();
+                let v = base64::decode(&kv.value).unwrap();
+                self.backend.put(&k, &v).unwrap();
             }
         }
     }
 }
 
 impl WriteStorage for URRocksStorage {
+    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        let key = make_data_key(KV, key);
+        self.backend.get(key).unwrap().map(|v| v.to_vec())
+    }
+    fn put(&self, key: &[u8], value: &[u8]) {
+        let key = make_data_key(KV, key);
+        self.backend.put(key, value).unwrap();
+    }
     fn apply_snapshot(&mut self, mut snapshot: Snapshot) -> RaftResult<()> {
         let mut meta = snapshot.take_metadata();
         self.apply_data_snapshot(snapshot.take_data());
@@ -408,7 +338,7 @@ impl ReadStorage for URRocksStorage {
 
 // const CONF_PREFIX: u8 = 0;
 const RAFT_PREFIX: u8 = 1;
-const DATA_PREFIX: u8 = 2;
+const DATA_PREFIX: u8 = 255;
 // https://github.com/LucioFranco/kv/blob/417dbb7f969bd311e1e9ed91ab9980a1cae25f56/src/storage.rs#L152
 const HIGH_INDEX: [u8; 16] = [
     RAFT_PREFIX,
@@ -431,7 +361,7 @@ const HIGH_INDEX: [u8; 16] = [
 const LOW_INDEX: [u8; 16] = [RAFT_PREFIX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 const LOW_DATA: [u8; 8] = [DATA_PREFIX, 0, 0, 0, 0, 0, 0, 0];
-const HIGH_DATA: [u8; 8] = [DATA_PREFIX + 1, 0, 0, 0, 0, 0, 0, 0];
+const HIGH_DATA: [u8; 8] = [DATA_PREFIX, 0, 0, 0, 255, 255, 255, 255];
 fn make_log_key(idx: u64) -> [u8; 16] {
     use bytes::BufMut;
     use std::io::Cursor;
@@ -446,15 +376,18 @@ fn make_log_key(idx: u64) -> [u8; 16] {
     key
 }
 
-fn make_data_key(key_s: &str) -> Vec<u8> {
+const KV: u16 = 1;
+
+fn make_data_key(prefix: u16, key_s: &[u8]) -> Vec<u8> {
     use bytes::BufMut;
     use std::io::{Cursor, Write};
     let mut key = vec![0; 8 + key_s.len()];
 
     {
         let mut key = Cursor::new(&mut key[..]);
-        key.put_u64_le(DATA_PREFIX as u64);
-        key.write_all(key_s.as_bytes()).unwrap();
+        key.put_u32_le(DATA_PREFIX as u32);
+        key.put_u32_le(prefix as u32);
+        key.write_all(key_s).unwrap();
     }
 
     key

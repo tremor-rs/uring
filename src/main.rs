@@ -17,6 +17,7 @@ mod codec;
 pub mod errors;
 mod raft_node;
 mod storage;
+use crate::storage::URRocksStorage;
 use actix::io::SinkWrite;
 use actix::prelude::*;
 use actix_codec::Framed;
@@ -535,7 +536,7 @@ fn loopy_thing(
     let mut t = Instant::now();
     let mut t1 = Instant::now();
     let mut last_state = StateRole::PreCandidate;
-    let mut node = if bootstrap {
+    let mut node: RaftNode<URRocksStorage> = if bootstrap {
         RaftNode::create_raft_leader(id, my_endpoint, rx.clone(), &logger)
     } else {
         RaftNode::create_raft_follower(id, my_endpoint, rx.clone(), &logger)
@@ -574,7 +575,9 @@ fn loopy_thing(
                 }
                 Ok(UrMsg::Get(key, reply)) => {
                     info!(logger, "Reading key"; "key" => &key);
-                    let value = node.get_key(key);
+                    let value = node
+                        .get_key(key.as_bytes())
+                        .and_then(|v| String::from_utf8(v).ok());
                     info!(logger, "Found value"; "value" => &value);
                     reply.send(value).unwrap();
                 }

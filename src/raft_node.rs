@@ -24,9 +24,6 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 
-//type UsedStorage = URMemStorage;
-type UsedStorage = URRocksStorage;
-
 fn example_config() -> Config {
     Config {
         election_tick: 10,
@@ -47,7 +44,10 @@ fn is_initial_msg(msg: &Message) -> bool {
 type LocalMailboxes = HashMap<u64, Addr<WsOfframpWorker>>;
 type RemoteMailboxes = HashMap<u64, Addr<UrSocket>>;
 
-impl fmt::Debug for RaftNode {
+impl<Storage> fmt::Debug for RaftNode<Storage>
+where
+    Storage: storage::Storage,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(g) = self.raft_group.as_ref() {
             write!(
@@ -88,12 +88,15 @@ remote connections: {:?}
     }
 }
 
-pub struct RaftNode {
+pub struct RaftNode<Storage>
+where
+    Storage: storage::Storage,
+{
     pub logger: Logger,
     // None if the raft is not initialized.
     pub id: u64,
     pub endpoint: String,
-    pub raft_group: Option<RawNode<UsedStorage>>,
+    pub raft_group: Option<RawNode<Storage>>,
     pub my_mailbox: Receiver<UrMsg>,
     pub local_mailboxes: LocalMailboxes,
     pub remote_mailboxes: RemoteMailboxes,
@@ -105,7 +108,10 @@ pub struct RaftNode {
     pub proposal_id: u64,
 }
 
-impl RaftNode {
+impl<Storage> RaftNode<Storage>
+where
+    Storage: storage::Storage,
+{
     pub fn log(&self) {
         if let Some(g) = self.raft_group.as_ref() {
             info!(
@@ -136,16 +142,16 @@ impl RaftNode {
             error!(self.logger, "UNINITIALIZED NODE {}", self.id)
         }
     }
-    pub fn get_key(&self, key: String) -> Option<String> {
+    pub fn get_key(&self, key: &[u8]) -> Option<Vec<u8>> {
         self.raft_group
             .as_ref()
             .unwrap()
             .raft
             .raft_log
             .store
-            .get(&key)
+            .get(key)
     }
-    pub fn put_key(&mut self, key: String, value: String) -> bool {
+    pub fn put_key(&mut self, key: &[u8], value: &[u8]) -> bool {
         self.raft_group
             .as_ref()
             .unwrap()
@@ -188,7 +194,7 @@ impl RaftNode {
         let mut cfg = example_config();
         cfg.id = id;
 
-        let storage = UsedStorage::new_with_conf_state(id, ConfState::from((vec![id], vec![])));
+        let storage = Storage::new_with_conf_state(id, ConfState::from((vec![id], vec![])));
         let raft_group = Some(RawNode::new(&cfg, storage, logger).unwrap());
         Self {
             logger: logger.clone(),
@@ -212,7 +218,7 @@ impl RaftNode {
         my_mailbox: Receiver<UrMsg>,
         logger: &Logger,
     ) -> Self {
-        let storage = UsedStorage::new(id);
+        let storage = Storage::new(id);
         Self {
             logger: logger.clone(),
             id,
@@ -241,7 +247,7 @@ impl RaftNode {
         }
         let mut cfg = example_config();
         cfg.id = msg.to;
-        let storage = UsedStorage::new(self.id);
+        let storage = Storage::new(self.id);
         self.raft_group = Some(RawNode::new(&cfg, storage, &self.logger).unwrap());
     }
 
@@ -355,7 +361,9 @@ impl RaftNode {
                     // For normal proposals, extract the key-value pair and then
                     // insert them into the kv engine.
                     if let Ok(kv) = serde_json::from_slice::<KV>(&entry.data) {
-                        self.put_key(kv.key, kv.value);
+                        let k = base64::decode(&kv.key).unwrap();
+                        let v = base64::decode(&kv.value).unwrap();
+                        self.put_key(&k, &v);
                     }
                 }
                 if self.raft_group.as_ref().unwrap().raft.state == StateRole::Leader {
@@ -440,15 +448,18 @@ impl RaftNode {
     }
 }
 
-pub(crate) fn propose_and_check_failed_proposal(
-    raft_group: &mut RawNode<UsedStorage>,
+pub(crate) fn propose_and_check_failed_proposal<Storage>(
+    raft_group: &mut RawNode<Storage>,
     proposal: &mut Proposal,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    Storage: ReadStorage,
+{
     let last_index1 = raft_group.raft.raft_log.last_index() + 1;
     if let Some((ref key, ref value)) = proposal.normal {
         let data = serde_json::to_vec(&KV {
-            key: key.clone(),
-            value: value.clone(),
+            key: base64::encode(key),
+            value: base64::encode(value),
         })
         .unwrap();
         raft_group.propose(vec![], data)?;
