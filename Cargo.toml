@@ -40,3 +40,6 @@ protobuf = "2"
 [patch.crates-io]
 raft = { git = 'https://github.com/tikv/raft-rs' }
 
+[features]
+default = ["json-proto"]
+json-proto = []

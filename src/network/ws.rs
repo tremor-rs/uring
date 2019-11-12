@@ -27,6 +27,7 @@ use awc::{
     ws::{CloseCode, CloseReason, Codec as AxCodec, Frame, Message},
     BoxedSocket, Client,
 };
+use bytes::Bytes;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use futures::{
     lazy,
@@ -469,12 +470,7 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for UrSocket {
                 //ctx.text(text)
             }
             ws::Message::Binary(bin) => {
-                let msg: crate::codec::json::Event = serde_json::from_slice(&bin).unwrap();
-                let msg: RaftMessage = msg.into();
-                // TODO FIXME feature flag pb / json
-                // let mut msg = RaftMessage::default();
-                // msg.merge_from_bytes(&bin).unwrap();
-                //println!("recived raft message {:?}", msg);
+                let msg = decode_ws(&bin);
                 self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
             }
             ws::Message::Close(_) => {
@@ -500,19 +496,7 @@ impl Handler<WsMessage> for UrSocket {
 impl Handler<RaftMsg> for UrSocket {
     type Result = ();
     fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
-        // let data = msg.0.write_to_bytes().unwrap();
-        // TODO FIXME Allow switching from pb <-> json by feature flag
-        let data: crate::codec::json::Event = msg.0.clone().into();
-        /*
-        if data.kind != codec::json::EventType::Heartbeat
-            && data.kind != codec::json::EventType::HeartbeatResponse
-        {
-            info!(self.node.logger, "{:?} => {:?}", msg.0, &data);
-        }
-        */
-        let data = serde_json::to_string_pretty(&data);
-        let data: bytes::Bytes = data.unwrap().into();
-        ctx.binary(data);
+        ctx.binary(encode_ws(msg));
     }
 }
 
@@ -604,6 +588,33 @@ impl Handler<WsMessage> for WsOfframpWorker {
     }
 }
 
+#[cfg(feature = "json-proto")]
+fn decode_ws(bin: &[u8]) -> RaftMessage {
+    let msg: crate::codec::json::Event = serde_json::from_slice(bin).unwrap();
+    msg.into()
+}
+
+#[cfg(not(feature = "json-proto"))]
+fn decode_ws(bin: &[u8]) -> RaftMessage {
+    use protobuf::Message;
+    let mut msg = RaftMessage::default();
+    msg.merge_from_bytes(bin).unwrap();
+    msg
+}
+
+#[cfg(feature = "json-proto")]
+fn encode_ws(msg: RaftMsg) -> Bytes {
+    let data: crate::codec::json::Event = msg.0.clone().into();
+    let data = serde_json::to_string_pretty(&data);
+    data.unwrap().into()
+}
+
+#[cfg(not(feature = "json-proto"))]
+fn encode_ws(msg: RaftMsg) -> Bytes {
+    use protobuf::Message;
+    msg.0.write_to_bytes().unwrap().into()
+}
+
 /// Handle server websocket messages
 impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
     fn handle(&mut self, msg: Frame, ctx: &mut Context<Self>) {
@@ -633,17 +644,11 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
                 eat_error!(self.logger, self.sink.write(Message::Text(String::new())));
             }
             Frame::Binary(Some(bin)) => {
-                let msg: crate::codec::json::Event = serde_json::from_slice(&bin).unwrap();
-                let msg: RaftMessage = msg.into();
-                // TODO FIXME feature flag pb / json
-                // msg.merge_from_bytes(&bin).unwrap();
+                let msg = decode_ws(&bin);
                 println!("received raft message {:?}", msg);
                 self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
             }
-            Frame::Binary(None) => {
-                //eat_error!(self.2.write(Message::Binary(Bytes::new())));
-                ()
-            }
+            Frame::Binary(None) => (),
             Frame::Pong(_) => (),
         }
     }
@@ -743,18 +748,6 @@ impl Handler<RaftMsg> for WsOfframpWorker {
     type Result = ();
 
     fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
-        // TODO FIXME Allow switching from pb <-> json by feature flag
-        let data: crate::codec::json::Event = msg.0.clone().into();
-        /*
-        if data.kind != codec::json::EventType::Heartbeat
-            && data.kind != codec::json::EventType::HeartbeatResponse
-        {
-            info!(self.logger, "{:?} => {:?}", msg.0, &data);
-        }
-        */
-        let data = serde_json::to_string_pretty(&data);
-        self.sink
-            .write(Message::Binary(data.unwrap().into()))
-            .unwrap();
+        self.sink.write(Message::Binary(encode_ws(msg))).unwrap();
     }
 }
