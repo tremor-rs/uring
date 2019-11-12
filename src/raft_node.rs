@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::storage::*;
+use crossbeam_channel::{Sender, TryRecvError};
 use protobuf::Message as PBMessage;
 use raft::eraftpb::ConfState;
 use raft::eraftpb::Message;
