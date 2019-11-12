@@ -15,8 +15,10 @@
 mod codec;
 #[allow(unused)]
 pub mod errors;
+mod network;
 mod raft_node;
 mod storage;
+use crate::network::{Network, WsNetwork};
 use crate::storage::URRocksStorage;
 use actix::io::SinkWrite;
 use actix::prelude::*;
@@ -506,7 +508,7 @@ pub enum HandshakeMsg {
     Hello(u64, String),
     Welcome(u64, String, Vec<(u64, String)>),
     AckProposal(u64, bool),
-    ForwardProposal(u64, u64, String, String),
+    ForwardProposal(u64, u64, Vec<u8>, Vec<u8>),
 }
 
 pub enum UrMsg {
@@ -516,7 +518,7 @@ pub enum UrMsg {
     DownLocal(u64),
     DownRemote(u64),
     AckProposal(u64, bool),
-    ForwardProposal(u64, u64, String, String),
+    ForwardProposal(u64, u64, Vec<u8>, Vec<u8>),
     RaftMsg(RaftMessage),
     Get(String, Sender<Option<String>>),
     Post(String, String, Sender<bool>),
@@ -536,10 +538,10 @@ fn loopy_thing(
     let mut t = Instant::now();
     let mut t1 = Instant::now();
     let mut last_state = StateRole::PreCandidate;
-    let mut node: RaftNode<URRocksStorage> = if bootstrap {
-        RaftNode::create_raft_leader(id, my_endpoint, rx.clone(), &logger)
+    let mut node: RaftNode<URRocksStorage, WsNetwork> = if bootstrap {
+        RaftNode::create_raft_leader(id, rx.clone(), &logger)
     } else {
-        RaftNode::create_raft_follower(id, my_endpoint, rx.clone(), &logger)
+        RaftNode::create_raft_follower(id, rx.clone(), &logger)
     };
     node.log();
 
@@ -588,22 +590,26 @@ fn loopy_thing(
                     if node.is_leader() {
                         info!(logger, "Writing key (on leader)"; "key" => &key, "proposal-id" => pid, "from" => from);
                         node.pending_acks.insert(pid, reply.clone());
-                        node.proposals
-                            .push_back(Proposal::normal(pid, from, key, value));
+                        node.proposals.push_back(Proposal::normal(
+                            pid,
+                            from,
+                            key.into_bytes(),
+                            value.into_bytes(),
+                        ));
                     } else {
                         let leader = node.leader();
                         info!(logger, "Writing key (forwarded)"; "key" => &key, "proposal-id" => pid, "forwarded-to" => leader);
-                        let msg =
-                            WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
-                        if let Some(remote) = node.local_mailboxes.get(&leader) {
-                            node.pending_acks.insert(pid, reply.clone());
-                            remote.send(msg).wait().unwrap();
-                        } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
-                            node.pending_acks.insert(pid, reply.clone());
-                            remote.send(msg).wait().unwrap();
-                        } else {
-                            error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()));
+                        if let Err(e) = node.network.forward_proposal(
+                            from,
+                            leader,
+                            pid,
+                            key.into_bytes(),
+                            value.into_bytes(),
+                        ) {
+                            error!(&logger, "not connected to leader: {}", e; "leader" => leader, "state" => format!("{:?}", node.role()));
                             reply.send(false).unwrap();
+                        } else {
+                            node.pending_acks.insert(pid, reply.clone());
                         }
                     }
                 }
@@ -624,14 +630,9 @@ fn loopy_thing(
                             .push_back(Proposal::normal(pid, from, key, value));
                     } else {
                         let leader = node.leader();
-                        let msg =
-                            WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
-                        if let Some(remote) = node.local_mailboxes.get(&leader) {
-                            remote.send(msg).wait().unwrap();
-                        } else if let Some(remote) = node.remote_mailboxes.get(&leader) {
-                            remote.send(msg).wait().unwrap();
-                        } else {
-                            error!(&logger, "not connected to leader"; "leader" => leader, "state" => format!("{:?}", node.role()))
+                        if let Err(e) = node.network.forward_proposal(from, leader, pid, key, value)
+                        {
+                            error!(&logger, "not connected to leader: {}", e; "leader" => leader, "state" => format!("{:?}", node.role()));
                         }
                     }
                 }
@@ -643,7 +644,7 @@ fn loopy_thing(
                     endpoint
                         .send(WsMessage::Msg(HandshakeMsg::Hello(
                             node.id,
-                            node.endpoint.clone(),
+                            my_endpoint.clone(),
                         )))
                         .wait()
                         .unwrap();
@@ -651,7 +652,7 @@ fn loopy_thing(
                 Ok(UrMsg::RegisterLocal(id, peer, endpoint, peers)) => {
                     if id != node.id {
                         info!(&logger, "register(local)"; "remote-id" => id, "remote-peer" => peer, "discovered-peers" => format!("{:?}", peers));
-                        node.local_mailboxes.insert(id, endpoint.clone());
+                        node.network.local_mailboxes.insert(id, endpoint.clone());
                         for (peer_id, peer) in peers {
                             if !known_peers.contains_key(&peer_id) {
                                 known_peers.insert(peer_id, peer.clone());
@@ -679,7 +680,7 @@ fn loopy_thing(
                             .clone()
                             .send(WsMessage::Msg(HandshakeMsg::Welcome(
                                 node.id,
-                                node.endpoint.clone(),
+                                my_endpoint.clone(),
                                 known_peers
                                     .clone()
                                     .into_iter()
@@ -687,20 +688,20 @@ fn loopy_thing(
                             )))
                             .wait()
                             .unwrap();
-                        node.remote_mailboxes.insert(id, endpoint.clone());
+                        node.network.remote_mailboxes.insert(id, endpoint.clone());
                     }
                 }
                 Ok(UrMsg::DownLocal(id)) => {
                     warn!(&logger, "down(local)"; "id" => id);
-                    node.local_mailboxes.remove(&id);
-                    if !node.remote_mailboxes.contains_key(&id) {
+                    node.network.local_mailboxes.remove(&id);
+                    if !node.network.remote_mailboxes.contains_key(&id) {
                         known_peers.remove(&id);
                     }
                 }
                 Ok(UrMsg::DownRemote(id)) => {
                     warn!(&logger, "down(remote)"; "id" => id);
-                    node.remote_mailboxes.remove(&id);
-                    if !node.local_mailboxes.contains_key(&id) {
+                    node.network.remote_mailboxes.remove(&id);
+                    if !node.network.local_mailboxes.contains_key(&id) {
                         known_peers.remove(&id);
                     }
                 }

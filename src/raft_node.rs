@@ -41,12 +41,10 @@ fn is_initial_msg(msg: &Message) -> bool {
         || (msg_type == MessageType::MsgHeartbeat && msg.commit == 0)
 }
 
-type LocalMailboxes = HashMap<u64, Addr<WsOfframpWorker>>;
-type RemoteMailboxes = HashMap<u64, Addr<UrSocket>>;
-
-impl<Storage> fmt::Debug for RaftNode<Storage>
+impl<Storage, Network> fmt::Debug for RaftNode<Storage, Network>
 where
     Storage: storage::Storage,
+    Network: network::Network,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(g) = self.raft_group.as_ref() {
@@ -64,8 +62,7 @@ last index: {}
 voted for: {}
 votes: {:?}
 nodes: {:?}
-local  connections: {:?}
-remote connections: {:?}
+connections: {:?}
             "#,
                 &g.raft.id,
                 self.role(),
@@ -79,8 +76,7 @@ remote connections: {:?}
                 &g.raft.vote,
                 &g.raft.votes,
                 &g.raft.prs().configuration().voters(),
-                &self.local_mailboxes.keys(),
-                &self.remote_mailboxes.keys(),
+                &self.network.connections(),
             )
         } else {
             write!(f, "UNINITIALIZED")
@@ -88,29 +84,27 @@ remote connections: {:?}
     }
 }
 
-pub struct RaftNode<Storage>
+pub struct RaftNode<Storage, Network>
 where
     Storage: storage::Storage,
+    Network: network::Network,
 {
     pub logger: Logger,
     // None if the raft is not initialized.
     pub id: u64,
-    pub endpoint: String,
     pub raft_group: Option<RawNode<Storage>>,
     pub my_mailbox: Receiver<UrMsg>,
-    pub local_mailboxes: LocalMailboxes,
-    pub remote_mailboxes: RemoteMailboxes,
-    // Key-value pairs after applied. `MemStorage` only contains raft logs,
-    // so we need an additional storage engine.
+    pub network: Network,
     pub proposals: VecDeque<Proposal>,
     pub pending_proposals: HashMap<u64, Proposal>,
     pub pending_acks: HashMap<u64, Sender<bool>>,
     pub proposal_id: u64,
 }
 
-impl<Storage> RaftNode<Storage>
+impl<Storage, Network> RaftNode<Storage, Network>
 where
     Storage: storage::Storage,
+    Network: network::Network,
 {
     pub fn log(&self) {
         if let Some(g) = self.raft_group.as_ref() {
@@ -135,8 +129,7 @@ where
                 "election-elapsed" => g.raft.election_elapsed,
                 "randomized-election-timeout" => g.raft.randomized_election_timeout(),
 
-                "local-mailboxes" => format!("{:?}", &self.local_mailboxes.keys()),
-                "remote-mailboxes" => format!("{:?}", &self.remote_mailboxes.keys()),
+                "connections" => format!("{:?}", &self.network.connections()),
             )
         } else {
             error!(self.logger, "UNINITIALIZED NODE {}", self.id)
@@ -185,12 +178,7 @@ where
     }
 
     // Create a raft leader only with itself in its configuration.
-    pub fn create_raft_leader(
-        id: u64,
-        endpoint: String,
-        my_mailbox: Receiver<UrMsg>,
-        logger: &Logger,
-    ) -> Self {
+    pub fn create_raft_leader(id: u64, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
         let mut cfg = example_config();
         cfg.id = id;
 
@@ -199,12 +187,10 @@ where
         Self {
             logger: logger.clone(),
             id,
-            endpoint,
             raft_group,
             my_mailbox,
             proposals: VecDeque::new(),
-            local_mailboxes: HashMap::new(),
-            remote_mailboxes: HashMap::new(),
+            network: Network::default(),
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
@@ -212,17 +198,11 @@ where
     }
 
     // Create a raft follower.
-    pub fn create_raft_follower(
-        id: u64,
-        endpoint: String,
-        my_mailbox: Receiver<UrMsg>,
-        logger: &Logger,
-    ) -> Self {
+    pub fn create_raft_follower(id: u64, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
         let storage = Storage::new(id);
         Self {
             logger: logger.clone(),
             id,
-            endpoint,
             raft_group: if storage.last_index().unwrap() == 1 {
                 None
             } else {
@@ -232,8 +212,7 @@ where
             },
             my_mailbox,
             proposals: VecDeque::new(),
-            local_mailboxes: HashMap::new(),
-            remote_mailboxes: HashMap::new(),
+            network: Network::default(),
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
@@ -334,7 +313,7 @@ where
 
         // Send out the messages come from the node.
         for msg in ready.messages.drain(..) {
-            self.send_msg(msg).unwrap();
+            self.network.send_msg(msg).unwrap();
         }
 
         // Apply all committed proposals.
@@ -378,13 +357,14 @@ where
                             self.pending_proposals.remove(&proposal.id);
                         } else {
                             info!(self.logger, "Handling proposal(remopte)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
-                            ack_proposal(
-                                &self.logger,
-                                &self.local_mailboxes,
-                                &self.remote_mailboxes,
-                                &proposal,
-                                true,
-                            )?;
+                            self.network
+                                .ack_proposal(proposal.proposer, proposal.id, true)
+                                .map_err(|e| {
+                                    Error::Io(IoError::new(
+                                        IoErrorKind::ConnectionAborted,
+                                        format!("{}", e),
+                                    ))
+                                })?;
                         }
                     }
                 }
@@ -408,13 +388,14 @@ where
                         pending.push(prop);
                     }
                 } else {
-                    ack_proposal(
-                        &self.logger,
-                        &self.local_mailboxes,
-                        &self.remote_mailboxes,
-                        p,
-                        false,
-                    )?;
+                    self.network
+                        .ack_proposal(p.proposer, p.id, false)
+                        .map_err(|e| {
+                            Error::Io(IoError::new(
+                                IoErrorKind::ConnectionAborted,
+                                format!("{}", e),
+                            ))
+                        })?;
                 }
             }
         }
@@ -422,29 +403,6 @@ where
             self.proposals.push_back(p)
         }
         Ok(())
-    }
-    fn send_msg(&self, msg: Message) -> Result<()> {
-        //println!("sending raft message {:?}", msg);
-        if let Some(remote) = self.local_mailboxes.get(&msg.to) {
-            remote
-                .send(RaftMsg(msg))
-                .wait()
-                .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
-        } else if let Some(remote) = self.remote_mailboxes.get(&msg.to) {
-            remote
-                .send(RaftMsg(msg))
-                .wait()
-                .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
-        } else {
-            debug!(self.logger, "send raft message fail, let Raft retry it"; "to"=> msg.to);
-            /* don't error or we crash)
-            Err(Error::ViolatesContract(format!(
-                "send raft message to {} fail, let Raft retry it",
-                msg.to
-            )));
-            */
-            Ok(())
-        }
     }
 }
 
@@ -483,49 +441,11 @@ where
     }
 }
 
-fn ack_proposal(
-    logger: &Logger,
-    local_mailboxes: &LocalMailboxes,
-    remote_mailboxes: &RemoteMailboxes,
-    proposal: &Proposal,
-    success: bool,
-) -> Result<()> {
-    if let Some(remote) = local_mailboxes.get(&proposal.proposer) {
-        remote
-            .send(WsMessage::Msg(HandshakeMsg::AckProposal(
-                proposal.id,
-                success,
-            )))
-            .wait()
-            .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
-    } else if let Some(remote) = remote_mailboxes.get(&proposal.proposer) {
-        remote
-            .send(WsMessage::Msg(HandshakeMsg::AckProposal(
-                proposal.id,
-                success,
-            )))
-            .wait()
-            .map_err(|e| Error::Io(IoError::new(IoErrorKind::ConnectionAborted, e)))
-    } else {
-        debug!(logger,
-            "send ack proposla  fail, let Raft retry it";
-            "to" =>proposal.proposer
-        );
-        Err(Error::Io(IoError::new(
-            IoErrorKind::ConnectionAborted,
-            format!(
-                "send ack proposla to {} fail, let Raft retry it",
-                proposal.proposer
-            ),
-        )))
-    }
-}
-
 pub struct Proposal {
     id: u64,
-    proposer: u64,                    // node id of the proposer
-    normal: Option<(String, String)>, // key is an u16 integer, and value is a string.
-    conf_change: Option<ConfChange>,  // conf change.
+    proposer: u64, // node id of the proposer
+    normal: Option<(Vec<u8>, Vec<u8>)>,
+    conf_change: Option<ConfChange>, // conf change.
     transfer_leader: Option<u64>,
     // If it's proposed, it will be set to the index of the entry.
     pub(crate) proposed: u64,
@@ -543,7 +463,7 @@ impl Proposal {
         }
     }
     #[allow(dead_code)]
-    pub fn normal(id: u64, proposer: u64, key: String, value: String) -> Self {
+    pub fn normal(id: u64, proposer: u64, key: Vec<u8>, value: Vec<u8>) -> Self {
         Self {
             id,
             proposer,
