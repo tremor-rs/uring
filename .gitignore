@@ -2,3 +2,4 @@
 **/*.rs.bk
 /target.*
 raft-rocks*
+contrib/__pycache__
