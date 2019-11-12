@@ -52,6 +52,7 @@ pub trait Network: Default {
 pub struct WsNetwork {
     pub local_mailboxes: LocalMailboxes,
     pub remote_mailboxes: RemoteMailboxes,
+    pub known_peers: HashMap<NodeId, String>,
 }
 
 impl Default for WsNetwork {
@@ -59,6 +60,7 @@ impl Default for WsNetwork {
         Self {
             local_mailboxes: HashMap::new(),
             remote_mailboxes: HashMap::new(),
+            known_peers: HashMap::new(),
         }
     }
 }
@@ -96,7 +98,8 @@ impl Network for WsNetwork {
                 .wait()
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else {
-            Err(Error::NotConnected(to))
+            // Err(Error::NotConnected(to)) this is not an error we'll retry
+            Ok(())
         }
     }
 

@@ -99,6 +99,7 @@ where
     pub pending_proposals: HashMap<u64, Proposal>,
     pub pending_acks: HashMap<u64, Sender<bool>>,
     pub proposal_id: u64,
+    pub timer: Instant,
 }
 
 impl<Storage, Network> RaftNode<Storage, Network>
@@ -106,6 +107,66 @@ where
     Storage: storage::Storage,
     Network: network::Network,
 {
+    pub fn tick(&mut self) -> Result<()> {
+        if !self.is_running() {
+            return Ok(());
+        }
+
+        if self.timer.elapsed() >= Duration::from_millis(100) {
+            // Tick the raft.
+
+            self.raft_group.as_mut().unwrap().tick();
+            self.timer = Instant::now();
+        }
+
+        if self.is_leader() {
+            // Handle new proposals.
+            self.propose_all()?;
+        }
+
+        self.on_ready()
+    }
+    pub fn propose_kv(
+        &mut self,
+        from: NodeId,
+        pid: u64,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> Result<()> {
+        if self.is_leader() {
+            self.proposals
+                .push_back(Proposal::normal(pid, from, key, value));
+            Ok(())
+        } else {
+            self.network
+                .forward_proposal(from, self.leader(), pid, key, value)
+                .map_err(|e| {
+                    Error::Io(IoError::new(
+                        IoErrorKind::ConnectionAborted,
+                        format!("{}", e),
+                    ))
+                })
+        }
+    }
+    pub fn add_node(&mut self, id: NodeId) -> bool {
+        if self.is_leader() && !self.node_known(id) {
+            let mut conf_change = ConfChange::default();
+            conf_change.node_id = id.0;
+            conf_change.set_change_type(ConfChangeType::AddNode);
+            let proposal = Proposal::conf_change(self.proposal_id, self.id, &conf_change);
+            self.proposal_id += 1;
+
+            self.proposals.push_back(proposal);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn next_pid(&mut self) -> u64 {
+        let pid = self.proposal_id;
+        self.proposal_id += 1;
+        pid
+    }
     pub fn node_known(&self, id: NodeId) -> bool {
         self.raft_group
             .as_ref()
@@ -202,6 +263,7 @@ where
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
+            timer: Instant::now(),
         }
     }
 
@@ -224,6 +286,7 @@ where
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
+            timer: Instant::now(),
         }
     }
 
@@ -321,7 +384,7 @@ where
 
         // Send out the messages come from the node.
         for msg in ready.messages.drain(..) {
-            self.network.send_msg(msg).unwrap();
+            self.network.send_msg(msg).unwrap()
         }
 
         // Apply all committed proposals.

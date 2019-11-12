@@ -18,7 +18,7 @@ pub mod errors;
 mod network;
 mod raft_node;
 mod storage;
-use crate::network::{Network, WsNetwork};
+use crate::network::WsNetwork;
 use crate::storage::URRocksStorage;
 use actix::io::SinkWrite;
 use actix::prelude::*;
@@ -40,7 +40,7 @@ use futures::{
     Future,
 };
 use raft::eraftpb::Message as RaftMessage;
-use raft::{prelude::*, StateRole};
+use raft::StateRole;
 use raft_node::*;
 use serde::{Deserialize, Serialize};
 use slog::Drain;
@@ -556,9 +556,9 @@ fn loopy_thing(
     logger: Logger,
 ) {
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
-    let mut t = Instant::now();
     let mut t1 = Instant::now();
     let mut last_state = StateRole::PreCandidate;
+
     let mut node: RaftNode<URRocksStorage, WsNetwork> = if bootstrap {
         RaftNode::create_raft_leader(id, rx.clone(), &logger)
     } else {
@@ -566,32 +566,17 @@ fn loopy_thing(
     };
     node.log();
 
-    let mut known_peers: HashMap<NodeId, String> = HashMap::new();
     loop {
         thread::sleep(Duration::from_millis(10));
         loop {
             match rx.try_recv() {
                 Ok(UrMsg::GetNode(id, reply)) => {
                     info!(logger, "Getting node status"; "id" => id);
-
                     reply.send(node.node_known(id)).unwrap();
                 }
                 Ok(UrMsg::AddNode(id, reply)) => {
                     info!(logger, "Adding node"; "id" => id);
-                    if node.is_leader() && !node.node_known(id) {
-                        let mut conf_change = ConfChange::default();
-                        conf_change.node_id = id.0;
-                        conf_change.set_change_type(ConfChangeType::AddNode);
-                        let proposal =
-                            Proposal::conf_change(node.proposal_id, node.id, &conf_change);
-                        node.proposal_id += 1;
-
-                        // FIXME might not be the leader
-                        node.proposals.push_back(proposal);
-                        reply.send(true).unwrap();
-                    } else {
-                        reply.send(false).unwrap();
-                    }
+                    reply.send(node.add_node(id)).unwrap();
                 }
                 Ok(UrMsg::Get(key, reply)) => {
                     info!(logger, "Reading key"; "key" => &key);
@@ -602,33 +587,14 @@ fn loopy_thing(
                     reply.send(value).unwrap();
                 }
                 Ok(UrMsg::Post(key, value, reply)) => {
-                    let pid = node.proposal_id;
-                    node.proposal_id += 1;
+                    let pid = node.next_pid();
                     let from = node.id;
-                    if node.is_leader() {
-                        info!(logger, "Writing key (on leader)"; "key" => &key, "proposal-id" => pid, "from" => from);
-                        node.pending_acks.insert(pid, reply.clone());
-                        node.proposals.push_back(Proposal::normal(
-                            pid,
-                            from,
-                            key.into_bytes(),
-                            value.into_bytes(),
-                        ));
+                    if let Err(e) = node.propose_kv(from, pid, key.into_bytes(), value.into_bytes())
+                    {
+                        error!(&logger, "Post forward error: {}", e);
+                        reply.send(false).unwrap();
                     } else {
-                        let leader = node.leader();
-                        info!(logger, "Writing key (forwarded)"; "key" => &key, "proposal-id" => pid, "forwarded-to" => leader);
-                        if let Err(e) = node.network.forward_proposal(
-                            from,
-                            leader,
-                            pid,
-                            key.into_bytes(),
-                            value.into_bytes(),
-                        ) {
-                            error!(&logger, "not connected to leader: {}", e; "leader" => leader, "state" => format!("{:?}", node.role()));
-                            reply.send(false).unwrap();
-                        } else {
-                            node.pending_acks.insert(pid, reply.clone());
-                        }
+                        node.pending_acks.insert(pid, reply.clone());
                     }
                 }
                 Ok(UrMsg::AckProposal(pid, success)) => {
@@ -643,15 +609,8 @@ fn loopy_thing(
                     }
                 }
                 Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
-                    if node.is_leader() {
-                        node.proposals
-                            .push_back(Proposal::normal(pid, from, key, value));
-                    } else {
-                        let leader = node.leader();
-                        if let Err(e) = node.network.forward_proposal(from, leader, pid, key, value)
-                        {
-                            error!(&logger, "not connected to leader: {}", e; "leader" => leader, "state" => format!("{:?}", node.role()));
-                        }
+                    if let Err(e) = node.propose_kv(from, pid, key, value) {
+                        error!(&logger, "Proposal forward error: {}", e);
                     }
                 }
                 // Connection handling of websocket connections
@@ -669,8 +628,8 @@ fn loopy_thing(
                         info!(&logger, "register(local)"; "remote-id" => id, "remote-peer" => peer, "discovered-peers" => format!("{:?}", peers));
                         node.network.local_mailboxes.insert(id, endpoint.clone());
                         for (peer_id, peer) in peers {
-                            if !known_peers.contains_key(&peer_id) {
-                                known_peers.insert(peer_id, peer.clone());
+                            if !node.network.known_peers.contains_key(&peer_id) {
+                                node.network.known_peers.insert(peer_id, peer.clone());
                                 let tx = tx.clone();
                                 let logger = logger.clone();
                                 thread::spawn(move || remote_endpoint(peer, tx, logger));
@@ -683,8 +642,8 @@ fn loopy_thing(
                 Ok(UrMsg::RegisterRemote(id, peer, endpoint)) => {
                     if id != node.id {
                         info!(&logger, "register(remote)"; "remote-id" => id, "remote-peer" => &peer);
-                        if !known_peers.contains_key(&id) {
-                            known_peers.insert(id, peer.clone());
+                        if !node.network.known_peers.contains_key(&id) {
+                            node.network.known_peers.insert(id, peer.clone());
                             let tx = tx.clone();
                             let logger = logger.clone();
                             thread::spawn(move || remote_endpoint(peer, tx, logger));
@@ -694,7 +653,8 @@ fn loopy_thing(
                             .send(WsMessage::Msg(CtrlMsg::HelloAck(
                                 node.id,
                                 my_endpoint.clone(),
-                                known_peers
+                                node.network
+                                    .known_peers
                                     .clone()
                                     .into_iter()
                                     .collect::<Vec<(NodeId, String)>>(),
@@ -708,14 +668,14 @@ fn loopy_thing(
                     warn!(&logger, "down(local)"; "id" => id);
                     node.network.local_mailboxes.remove(&id);
                     if !node.network.remote_mailboxes.contains_key(&id) {
-                        known_peers.remove(&id);
+                        node.network.known_peers.remove(&id);
                     }
                 }
                 Ok(UrMsg::DownRemote(id)) => {
                     warn!(&logger, "down(remote)"; "id" => id);
                     node.network.remote_mailboxes.remove(&id);
                     if !node.network.local_mailboxes.contains_key(&id) {
-                        known_peers.remove(&id);
+                        node.network.known_peers.remove(&id);
                     }
                 }
 
@@ -729,29 +689,13 @@ fn loopy_thing(
                 Err(TryRecvError::Disconnected) => return,
             }
         }
-        if !node.is_running() {
-            continue;
-        }
 
-        if t.elapsed() >= Duration::from_millis(100) {
-            // Tick the raft.
-
-            node.raft_group.as_mut().unwrap().tick();
-            t = Instant::now();
-        }
-
-        let this_state = node.raft_group.as_ref().unwrap().raft.state.clone();
+        let this_state = node.role().clone();
 
         if t1.elapsed() >= Duration::from_secs(10) {
             // Tick the raft.
             node.log();
             t1 = Instant::now();
-        }
-
-        // Let the leader pick pending proposals from the global queue.
-        if node.is_leader() {
-            // Handle new proposals.
-            node.propose_all().unwrap();
         }
 
         if this_state != last_state {
@@ -760,7 +704,7 @@ fn loopy_thing(
         }
 
         // Handle readies from the raft.
-        node.on_ready().unwrap();
+        node.tick().unwrap();
     }
 }
 
