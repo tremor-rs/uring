@@ -18,7 +18,7 @@ pub mod errors;
 mod network;
 mod raft_node;
 mod storage;
-use crate::network::WsNetwork;
+use crate::network::{RaftNetworkMsg, WsNetwork};
 use crate::storage::URRocksStorage;
 use actix::io::SinkWrite;
 use actix::prelude::*;
@@ -114,8 +114,16 @@ fn get(
 ) -> Result<HttpResponse, Error> {
     let (tx, rx) = bounded(1);
     let key = params.id.clone();
-    srv.get_ref().tx.send(UrMsg::Get(key.clone(), tx)).unwrap();
-    if let Some(value) = rx.recv().unwrap() {
+    srv.get_ref()
+        .tx
+        .send(UrMsg::Get(key.clone().into_bytes(), tx))
+        .unwrap();
+    if let Some(value) = rx
+        .recv()
+        .ok()
+        .and_then(|v| v)
+        .and_then(|v| String::from_utf8(v).ok())
+    {
         Ok(HttpResponse::Ok().json(KV { key, value }))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
@@ -137,7 +145,11 @@ fn post(
     let (tx, rx) = bounded(1);
     srv.get_ref()
         .tx
-        .send(UrMsg::Post(params.id.clone(), body.value.clone(), tx))
+        .send(UrMsg::Post(
+            params.id.clone().into_bytes(),
+            body.value.clone().into_bytes(),
+            tx,
+        ))
         .unwrap();
     if rx.recv().unwrap() {
         Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
@@ -543,8 +555,8 @@ pub enum UrMsg {
     GetNode(NodeId, Sender<bool>),
     AddNode(NodeId, Sender<bool>),
 
-    Get(String, Sender<Option<String>>),
-    Post(String, String, Sender<bool>),
+    Get(Vec<u8>, Sender<Option<Vec<u8>>>),
+    Post(Vec<u8>, Vec<u8>, Sender<bool>),
 }
 
 fn loopy_thing(
@@ -558,137 +570,16 @@ fn loopy_thing(
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut t1 = Instant::now();
     let mut last_state = StateRole::PreCandidate;
-
-    let mut node: RaftNode<URRocksStorage, WsNetwork> = if bootstrap {
-        RaftNode::create_raft_leader(id, rx.clone(), &logger)
+    let network = WsNetwork::new(&logger, id, &my_endpoint, rx, tx);
+    let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
+        RaftNode::create_raft_leader(&logger, id, network)
     } else {
-        RaftNode::create_raft_follower(id, rx.clone(), &logger)
+        RaftNode::create_raft_follower(&logger, id, network)
     };
     node.log();
 
     loop {
         thread::sleep(Duration::from_millis(10));
-        loop {
-            match rx.try_recv() {
-                Ok(UrMsg::GetNode(id, reply)) => {
-                    info!(logger, "Getting node status"; "id" => id);
-                    reply.send(node.node_known(id)).unwrap();
-                }
-                Ok(UrMsg::AddNode(id, reply)) => {
-                    info!(logger, "Adding node"; "id" => id);
-                    reply.send(node.add_node(id)).unwrap();
-                }
-                Ok(UrMsg::Get(key, reply)) => {
-                    info!(logger, "Reading key"; "key" => &key);
-                    let value = node
-                        .get_key(key.as_bytes())
-                        .and_then(|v| String::from_utf8(v).ok());
-                    info!(logger, "Found value"; "value" => &value);
-                    reply.send(value).unwrap();
-                }
-                Ok(UrMsg::Post(key, value, reply)) => {
-                    let pid = node.next_pid();
-                    let from = node.id;
-                    if let Err(e) = node.propose_kv(from, pid, key.into_bytes(), value.into_bytes())
-                    {
-                        error!(&logger, "Post forward error: {}", e);
-                        reply.send(false).unwrap();
-                    } else {
-                        node.pending_acks.insert(pid, reply.clone());
-                    }
-                }
-                Ok(UrMsg::AckProposal(pid, success)) => {
-                    info!(&logger, "proposal acknowledged"; "pid" => pid);
-                    if let Some(proposal) = node.pending_proposals.remove(&pid) {
-                        if !success {
-                            node.proposals.push_back(proposal)
-                        }
-                    }
-                    if let Some(reply) = node.pending_acks.remove(&pid) {
-                        reply.send(success).unwrap();
-                    }
-                }
-                Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
-                    if let Err(e) = node.propose_kv(from, pid, key, value) {
-                        error!(&logger, "Proposal forward error: {}", e);
-                    }
-                }
-                // Connection handling of websocket connections
-                // partially based on the problem that actix ws client
-                // doens't reconnect
-                Ok(UrMsg::InitLocal(endpoint)) => {
-                    info!(&logger, "Initializing local endpoint");
-                    endpoint
-                        .send(WsMessage::Msg(CtrlMsg::Hello(node.id, my_endpoint.clone())))
-                        .wait()
-                        .unwrap();
-                }
-                Ok(UrMsg::RegisterLocal(id, peer, endpoint, peers)) => {
-                    if id != node.id {
-                        info!(&logger, "register(local)"; "remote-id" => id, "remote-peer" => peer, "discovered-peers" => format!("{:?}", peers));
-                        node.network.local_mailboxes.insert(id, endpoint.clone());
-                        for (peer_id, peer) in peers {
-                            if !node.network.known_peers.contains_key(&peer_id) {
-                                node.network.known_peers.insert(peer_id, peer.clone());
-                                let tx = tx.clone();
-                                let logger = logger.clone();
-                                thread::spawn(move || remote_endpoint(peer, tx, logger));
-                            }
-                        }
-                    }
-                }
-
-                // Reply to hello => sends RegisterLocal
-                Ok(UrMsg::RegisterRemote(id, peer, endpoint)) => {
-                    if id != node.id {
-                        info!(&logger, "register(remote)"; "remote-id" => id, "remote-peer" => &peer);
-                        if !node.network.known_peers.contains_key(&id) {
-                            node.network.known_peers.insert(id, peer.clone());
-                            let tx = tx.clone();
-                            let logger = logger.clone();
-                            thread::spawn(move || remote_endpoint(peer, tx, logger));
-                        }
-                        endpoint
-                            .clone()
-                            .send(WsMessage::Msg(CtrlMsg::HelloAck(
-                                node.id,
-                                my_endpoint.clone(),
-                                node.network
-                                    .known_peers
-                                    .clone()
-                                    .into_iter()
-                                    .collect::<Vec<(NodeId, String)>>(),
-                            )))
-                            .wait()
-                            .unwrap();
-                        node.network.remote_mailboxes.insert(id, endpoint.clone());
-                    }
-                }
-                Ok(UrMsg::DownLocal(id)) => {
-                    warn!(&logger, "down(local)"; "id" => id);
-                    node.network.local_mailboxes.remove(&id);
-                    if !node.network.remote_mailboxes.contains_key(&id) {
-                        node.network.known_peers.remove(&id);
-                    }
-                }
-                Ok(UrMsg::DownRemote(id)) => {
-                    warn!(&logger, "down(remote)"; "id" => id);
-                    node.network.remote_mailboxes.remove(&id);
-                    if !node.network.local_mailboxes.contains_key(&id) {
-                        node.network.known_peers.remove(&id);
-                    }
-                }
-
-                // RAFT
-                Ok(UrMsg::RaftMsg(msg)) => {
-                    if let Err(e) = node.step(msg) {
-                        error!(&logger, "step error"; "error" => format!("{}", e));
-                    }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return,
-            }
-        }
 
         let this_state = node.role().clone();
 

@@ -93,7 +93,6 @@ where
     // None if the raft is not initialized.
     pub id: NodeId,
     pub raft_group: Option<RawNode<Storage>>,
-    pub my_mailbox: Receiver<UrMsg>,
     pub network: Network,
     pub proposals: VecDeque<Proposal>,
     pub pending_proposals: HashMap<u64, Proposal>,
@@ -108,6 +107,63 @@ where
     Network: network::Network,
 {
     pub fn tick(&mut self) -> Result<()> {
+        loop {
+            match self.network.try_recv() {
+                Ok(RaftNetworkMsg::GetNode(id, reply)) => {
+                    info!(self.logger, "Getting node status"; "id" => id);
+                    reply.send(self.node_known(id)).unwrap();
+                }
+                Ok(RaftNetworkMsg::AddNode(id, reply)) => {
+                    info!(self.logger, "Adding node"; "id" => id);
+                    reply.send(self.add_node(id)).unwrap();
+                }
+                Ok(RaftNetworkMsg::Get(key, reply)) => {
+                    let value = self.get_key(&key);
+                    info!(self.logger, "Reading key"; "key" => String::from_utf8(key).ok());
+                    reply.send(value).unwrap();
+                }
+                Ok(RaftNetworkMsg::Post(key, value, reply)) => {
+                    let pid = self.next_pid();
+                    let from = self.id;
+                    if let Err(e) = self.propose_kv(from, pid, key, value) {
+                        error!(self.logger, "Post forward error: {}", e);
+                        reply.send(false).unwrap();
+                    } else {
+                        self.pending_acks.insert(pid, reply.clone());
+                    }
+                }
+                Ok(RaftNetworkMsg::AckProposal(pid, success)) => {
+                    info!(self.logger, "proposal acknowledged"; "pid" => pid);
+                    if let Some(proposal) = self.pending_proposals.remove(&pid) {
+                        if !success {
+                            self.proposals.push_back(proposal)
+                        }
+                    }
+                    if let Some(reply) = self.pending_acks.remove(&pid) {
+                        reply.send(success).unwrap();
+                    }
+                }
+                Ok(RaftNetworkMsg::ForwardProposal(from, pid, key, value)) => {
+                    if let Err(e) = self.propose_kv(from, pid, key, value) {
+                        error!(self.logger, "Proposal forward error: {}", e);
+                    }
+                }
+
+                // RAFT
+                Ok(RaftNetworkMsg::RaftMsg(msg)) => {
+                    if let Err(e) = self.step(msg) {
+                        error!(self.logger, "step error"; "error" => format!("{}", e));
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(Error::Io(IoError::new(
+                        IoErrorKind::ConnectionAborted,
+                        format!("Network disconnected"),
+                    )))
+                }
+            }
+        }
         if !self.is_running() {
             return Ok(());
         }
@@ -247,7 +303,7 @@ where
     }
 
     // Create a raft leader only with itself in its configuration.
-    pub fn create_raft_leader(id: NodeId, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
+    pub fn create_raft_leader(logger: &Logger, id: NodeId, network: Network) -> Self {
         let mut cfg = example_config();
         cfg.id = id.0;
 
@@ -257,9 +313,8 @@ where
             logger: logger.clone(),
             id,
             raft_group,
-            my_mailbox,
             proposals: VecDeque::new(),
-            network: Network::default(),
+            network,
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
@@ -268,7 +323,7 @@ where
     }
 
     // Create a raft follower.
-    pub fn create_raft_follower(id: NodeId, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
+    pub fn create_raft_follower(logger: &Logger, id: NodeId, network: Network) -> Self {
         let storage = Storage::new(id);
         Self {
             logger: logger.clone(),
@@ -280,9 +335,8 @@ where
                 cfg.id = id.0;
                 Some(RawNode::new(&cfg, storage, logger).unwrap())
             },
-            my_mailbox,
             proposals: VecDeque::new(),
-            network: Network::default(),
+            network,
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,

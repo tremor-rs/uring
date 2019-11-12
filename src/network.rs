@@ -35,7 +35,30 @@ impl fmt::Display for Error {
     }
 }
 
-pub trait Network: Default {
+/*
+    // Network related
+    InitLocal(Addr<WsOfframpWorker>),
+    RegisterLocal(NodeId, String, Addr<WsOfframpWorker>, Vec<(NodeId, String)>),
+    RegisterRemote(NodeId, String, Addr<UrSocket>),
+    DownLocal(NodeId),
+    DownRemote(NodeId),
+
+*/
+pub enum RaftNetworkMsg {
+    // Raft related
+    AckProposal(u64, bool),
+    ForwardProposal(NodeId, u64, Vec<u8>, Vec<u8>),
+    GetNode(NodeId, Sender<bool>),
+    AddNode(NodeId, Sender<bool>),
+
+    Get(Vec<u8>, Sender<Option<Vec<u8>>>),
+    Post(Vec<u8>, Vec<u8>, Sender<bool>),
+
+    RaftMsg(RaftMessage),
+}
+
+pub trait Network {
+    fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError>;
     fn ack_proposal(&self, to: NodeId, pid: u64, success: bool) -> Result<(), Error>;
     fn send_msg(&self, msg: Message) -> Result<(), Error>;
     fn connections(&self) -> Vec<NodeId>;
@@ -50,22 +73,126 @@ pub trait Network: Default {
 }
 
 pub struct WsNetwork {
+    id: NodeId,
     pub local_mailboxes: LocalMailboxes,
     pub remote_mailboxes: RemoteMailboxes,
     pub known_peers: HashMap<NodeId, String>,
+    endpoint: String,
+    logger: Logger,
+    rx: Receiver<UrMsg>,
+    tx: Sender<UrMsg>,
 }
 
-impl Default for WsNetwork {
-    fn default() -> Self {
+impl WsNetwork {
+    pub fn new(
+        logger: &Logger,
+        id: NodeId,
+        endpoint: &str,
+        rx: Receiver<UrMsg>,
+        tx: Sender<UrMsg>,
+    ) -> Self {
         Self {
+            id,
+            endpoint: endpoint.to_string(),
+            logger: logger.clone(),
             local_mailboxes: HashMap::new(),
             remote_mailboxes: HashMap::new(),
             known_peers: HashMap::new(),
+            rx,
+            tx,
         }
     }
 }
 
 impl Network for WsNetwork {
+    fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError> {
+        use RaftNetworkMsg::*;
+        match self.rx.try_recv() {
+            Ok(UrMsg::GetNode(id, reply)) => Ok(GetNode(id, reply)),
+            Ok(UrMsg::AddNode(id, reply)) => Ok(AddNode(id, reply)),
+            Ok(UrMsg::Get(key, reply)) => Ok(Get(key, reply)),
+            Ok(UrMsg::Post(key, value, reply)) => Ok(Post(key, value, reply)),
+            Ok(UrMsg::AckProposal(pid, success)) => Ok(AckProposal(pid, success)),
+            Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
+                Ok(ForwardProposal(from, pid, key, value))
+            }
+            Ok(UrMsg::RaftMsg(msg)) => Ok(RaftMsg(msg)),
+            // Connection handling of websocket connections
+            // partially based on the problem that actix ws client
+            // doens't reconnect
+            Ok(UrMsg::InitLocal(endpoint)) => {
+                info!(self.logger, "Initializing local endpoint");
+                endpoint
+                    .send(WsMessage::Msg(CtrlMsg::Hello(
+                        self.id,
+                        self.endpoint.clone(),
+                    )))
+                    .wait()
+                    .unwrap();
+                self.try_recv()
+            }
+            Ok(UrMsg::RegisterLocal(id, peer, endpoint, peers)) => {
+                if id != self.id {
+                    info!(self.logger, "register(local)"; "remote-id" => id, "remote-peer" => peer, "discovered-peers" => format!("{:?}", peers));
+                    self.local_mailboxes.insert(id, endpoint.clone());
+                    for (peer_id, peer) in peers {
+                        if !self.known_peers.contains_key(&peer_id) {
+                            self.known_peers.insert(peer_id, peer.clone());
+                            let tx = self.tx.clone();
+                            let logger = self.logger.clone();
+                            thread::spawn(move || remote_endpoint(peer, tx, logger));
+                        }
+                    }
+                }
+                self.try_recv()
+            }
+
+            // Reply to hello => sends RegisterLocal
+            Ok(UrMsg::RegisterRemote(id, peer, endpoint)) => {
+                if id != self.id {
+                    info!(self.logger, "register(remote)"; "remote-id" => id, "remote-peer" => &peer);
+                    if !self.known_peers.contains_key(&id) {
+                        self.known_peers.insert(id, peer.clone());
+                        let tx = self.tx.clone();
+                        let logger = self.logger.clone();
+                        thread::spawn(move || remote_endpoint(peer, tx, logger));
+                    }
+                    endpoint
+                        .clone()
+                        .send(WsMessage::Msg(CtrlMsg::HelloAck(
+                            self.id,
+                            self.endpoint.clone(),
+                            self.known_peers
+                                .clone()
+                                .into_iter()
+                                .collect::<Vec<(NodeId, String)>>(),
+                        )))
+                        .wait()
+                        .unwrap();
+                    self.remote_mailboxes.insert(id, endpoint.clone());
+                }
+                self.try_recv()
+            }
+            Ok(UrMsg::DownLocal(id)) => {
+                warn!(self.logger, "down(local)"; "id" => id);
+                self.local_mailboxes.remove(&id);
+                if !self.remote_mailboxes.contains_key(&id) {
+                    self.known_peers.remove(&id);
+                }
+                self.try_recv()
+            }
+            Ok(UrMsg::DownRemote(id)) => {
+                warn!(self.logger, "down(remote)"; "id" => id);
+                self.remote_mailboxes.remove(&id);
+                if !self.local_mailboxes.contains_key(&id) {
+                    self.known_peers.remove(&id);
+                }
+                self.try_recv()
+            }
+
+            Err(e) => Err(e),
+        }
+    }
     fn ack_proposal(&self, to: NodeId, pid: u64, success: bool) -> Result<(), Error> {
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
