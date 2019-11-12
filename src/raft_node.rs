@@ -91,7 +91,7 @@ where
 {
     pub logger: Logger,
     // None if the raft is not initialized.
-    pub id: u64,
+    pub id: NodeId,
     pub raft_group: Option<RawNode<Storage>>,
     pub my_mailbox: Receiver<UrMsg>,
     pub network: Network,
@@ -106,6 +106,12 @@ where
     Storage: storage::Storage,
     Network: network::Network,
 {
+    pub fn node_known(&self, id: NodeId) -> bool {
+        self.raft_group
+            .as_ref()
+            .map(|g| g.raft.prs().configuration().contains(id.0))
+            .unwrap_or_default()
+    }
     pub fn log(&self) {
         if let Some(g) = self.raft_group.as_ref() {
             info!(
@@ -170,19 +176,21 @@ where
             .unwrap_or_default()
     }
 
-    pub fn leader(&self) -> u64 {
-        self.raft_group
-            .as_ref()
-            .map(|g| g.raft.leader_id)
-            .unwrap_or_default()
+    pub fn leader(&self) -> NodeId {
+        NodeId(
+            self.raft_group
+                .as_ref()
+                .map(|g| g.raft.leader_id)
+                .unwrap_or_default(),
+        )
     }
 
     // Create a raft leader only with itself in its configuration.
-    pub fn create_raft_leader(id: u64, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
+    pub fn create_raft_leader(id: NodeId, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
         let mut cfg = example_config();
-        cfg.id = id;
+        cfg.id = id.0;
 
-        let storage = Storage::new_with_conf_state(id, ConfState::from((vec![id], vec![])));
+        let storage = Storage::new_with_conf_state(id, ConfState::from((vec![id.0], vec![])));
         let raft_group = Some(RawNode::new(&cfg, storage, logger).unwrap());
         Self {
             logger: logger.clone(),
@@ -198,7 +206,7 @@ where
     }
 
     // Create a raft follower.
-    pub fn create_raft_follower(id: u64, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
+    pub fn create_raft_follower(id: NodeId, my_mailbox: Receiver<UrMsg>, logger: &Logger) -> Self {
         let storage = Storage::new(id);
         Self {
             logger: logger.clone(),
@@ -207,7 +215,7 @@ where
                 None
             } else {
                 let mut cfg = example_config();
-                cfg.id = id;
+                cfg.id = id.0;
                 Some(RawNode::new(&cfg, storage, logger).unwrap())
             },
             my_mailbox,
@@ -443,7 +451,7 @@ where
 
 pub struct Proposal {
     id: u64,
-    proposer: u64, // node id of the proposer
+    proposer: NodeId, // node id of the proposer
     normal: Option<(Vec<u8>, Vec<u8>)>,
     conf_change: Option<ConfChange>, // conf change.
     transfer_leader: Option<u64>,
@@ -452,7 +460,7 @@ pub struct Proposal {
 }
 
 impl Proposal {
-    pub fn conf_change(id: u64, proposer: u64, cc: &ConfChange) -> Self {
+    pub fn conf_change(id: u64, proposer: NodeId, cc: &ConfChange) -> Self {
         Self {
             id,
             proposer,
@@ -463,7 +471,7 @@ impl Proposal {
         }
     }
     #[allow(dead_code)]
-    pub fn normal(id: u64, proposer: u64, key: Vec<u8>, value: Vec<u8>) -> Self {
+    pub fn normal(id: u64, proposer: NodeId, key: Vec<u8>, value: Vec<u8>) -> Self {
         Self {
             id,
             proposer,

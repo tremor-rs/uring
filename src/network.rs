@@ -19,14 +19,14 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
-type LocalMailboxes = HashMap<u64, Addr<WsOfframpWorker>>;
-type RemoteMailboxes = HashMap<u64, Addr<UrSocket>>;
+type LocalMailboxes = HashMap<NodeId, Addr<WsOfframpWorker>>;
+type RemoteMailboxes = HashMap<NodeId, Addr<UrSocket>>;
 
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
     Generic(String),
-    NotConnected(u64),
+    NotConnected(NodeId),
 }
 impl std::error::Error for Error {}
 impl fmt::Display for Error {
@@ -36,13 +36,13 @@ impl fmt::Display for Error {
 }
 
 pub trait Network: Default {
-    fn ack_proposal(&self, to: u64, pid: u64, success: bool) -> Result<(), Error>;
+    fn ack_proposal(&self, to: NodeId, pid: u64, success: bool) -> Result<(), Error>;
     fn send_msg(&self, msg: Message) -> Result<(), Error>;
-    fn connections(&self) -> Vec<u64>;
+    fn connections(&self) -> Vec<NodeId>;
     fn forward_proposal(
         &self,
-        from: u64,
-        to: u64,
+        from: NodeId,
+        to: NodeId,
         pid: u64,
         key: Vec<u8>,
         value: Vec<u8>,
@@ -53,6 +53,7 @@ pub struct WsNetwork {
     pub local_mailboxes: LocalMailboxes,
     pub remote_mailboxes: RemoteMailboxes,
 }
+
 impl Default for WsNetwork {
     fn default() -> Self {
         Self {
@@ -63,15 +64,15 @@ impl Default for WsNetwork {
 }
 
 impl Network for WsNetwork {
-    fn ack_proposal(&self, to: u64, pid: u64, success: bool) -> Result<(), Error> {
+    fn ack_proposal(&self, to: NodeId, pid: u64, success: bool) -> Result<(), Error> {
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
-                .send(WsMessage::Msg(HandshakeMsg::AckProposal(pid, success)))
+                .send(WsMessage::Msg(CtrlMsg::AckProposal(pid, success)))
                 .wait()
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get(&to) {
             remote
-                .send(WsMessage::Msg(HandshakeMsg::AckProposal(pid, success)))
+                .send(WsMessage::Msg(CtrlMsg::AckProposal(pid, success)))
                 .wait()
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else {
@@ -81,24 +82,27 @@ impl Network for WsNetwork {
             )))
         }
     }
+
     fn send_msg(&self, msg: Message) -> Result<(), Error> {
-        if let Some(remote) = self.local_mailboxes.get(&msg.to) {
+        let to = NodeId(msg.to);
+        if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
                 .send(RaftMsg(msg))
                 .wait()
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
-        } else if let Some(remote) = self.remote_mailboxes.get(&msg.to) {
+        } else if let Some(remote) = self.remote_mailboxes.get(&to) {
             remote
                 .send(RaftMsg(msg))
                 .wait()
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else {
-            Err(Error::NotConnected(msg.to))
+            Err(Error::NotConnected(to))
         }
     }
-    fn connections(&self) -> Vec<u64> {
-        let mut k1: Vec<u64> = self.local_mailboxes.keys().copied().collect();
-        let mut k2: Vec<u64> = self.remote_mailboxes.keys().copied().collect();
+
+    fn connections(&self) -> Vec<NodeId> {
+        let mut k1: Vec<NodeId> = self.local_mailboxes.keys().copied().collect();
+        let mut k2: Vec<NodeId> = self.remote_mailboxes.keys().copied().collect();
         k1.append(&mut k2);
         k1.sort();
         k1.dedup();
@@ -107,13 +111,13 @@ impl Network for WsNetwork {
 
     fn forward_proposal(
         &self,
-        from: u64,
-        to: u64,
+        from: NodeId,
+        to: NodeId,
         pid: u64,
         key: Vec<u8>,
         value: Vec<u8>,
     ) -> Result<(), Error> {
-        let msg = WsMessage::Msg(HandshakeMsg::ForwardProposal(from, pid, key, value));
+        let msg = WsMessage::Msg(CtrlMsg::ForwardProposal(from, pid, key, value));
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
                 .send(msg)

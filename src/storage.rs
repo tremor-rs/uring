@@ -14,7 +14,7 @@
 
 // inspired by https://github.com/LucioFranco/kv/blob/master/src/storage.rs
 
-use crate::KV;
+use crate::{NodeId, KV};
 use protobuf::Message;
 use raft::eraftpb::{ConfState, HardState};
 use raft::eraftpb::{Entry, Snapshot};
@@ -24,8 +24,8 @@ use raft::{Error as RaftError, Result as RaftResult, StorageError};
 use std::borrow::Borrow;
 
 pub trait Storage: WriteStorage + ReadStorage {
-    fn new_with_conf_state(id: u64, state: ConfState) -> Self;
-    fn new(id: u64) -> Self;
+    fn new_with_conf_state(id: NodeId, state: ConfState) -> Self;
+    fn new(id: NodeId) -> Self;
 }
 /// The missing storage trait from raft-rs ...
 pub trait WriteStorage {
@@ -49,15 +49,15 @@ pub struct URRocksStorage {
 }
 
 impl Storage for URRocksStorage {
-    fn new_with_conf_state(id: u64, state: ConfState) -> Self {
+    fn new_with_conf_state(id: NodeId, state: ConfState) -> Self {
         let mut db = Self::new(id);
 
         db.set_conf_state(state).unwrap();
         db.set_hard_state(1, 1).unwrap();
         db
     }
-    fn new(id: u64) -> Self {
-        let backend = DB::open_default(&format!("raft-rocks-{}", id)).unwrap();
+    fn new(id: NodeId) -> Self {
+        let backend = DB::open_default(&format!("raft-rocks-{}", id.0)).unwrap();
         Self {
             backend,
             conf_state: None,

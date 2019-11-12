@@ -44,8 +44,9 @@ use raft::{prelude::*, StateRole};
 use raft_node::*;
 use serde::{Deserialize, Serialize};
 use slog::Drain;
-use slog::Logger;
+use slog::{Key, Logger, Record, Value};
 use std::collections::HashMap;
+use std::fmt;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -56,6 +57,26 @@ extern crate slog;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// How long before lack of client response causes a timeout
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
+pub struct NodeId(u64);
+
+impl Value for NodeId {
+    fn serialize(
+        &self,
+        _rec: &Record,
+        key: Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64(key, self.0)
+    }
+}
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Node({:?})", self)
+    }
+}
 
 macro_rules! eat_error {
     ($l:expr, $e:expr) => {
@@ -127,7 +148,7 @@ fn post(
 
 #[derive(Deserialize)]
 pub struct GetNodeParams {
-    id: u64,
+    id: NodeId,
 }
 fn get_node(
     _r: HttpRequest,
@@ -171,7 +192,7 @@ pub struct UrSocket {
     /// otherwise we drop connection.
     hb: Instant,
     node: Node,
-    remote_id: u64,
+    remote_id: NodeId,
 }
 
 impl Actor for UrSocket {
@@ -203,19 +224,19 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for UrSocket {
                 self.hb = Instant::now();
             }
             ws::Message::Text(text) => {
-                let msg: HandshakeMsg = serde_json::from_str(&text).unwrap();
+                let msg: CtrlMsg = serde_json::from_str(&text).unwrap();
                 match msg {
-                    HandshakeMsg::Hello(id, peer) => {
+                    CtrlMsg::Hello(id, peer) => {
                         self.remote_id = id;
                         self.node
                             .tx
                             .send(UrMsg::RegisterRemote(id, peer, ctx.address()))
                             .unwrap();
                     }
-                    HandshakeMsg::AckProposal(pid, success) => {
+                    CtrlMsg::AckProposal(pid, success) => {
                         self.node.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
                     }
-                    HandshakeMsg::ForwardProposal(from, pid, key, value) => {
+                    CtrlMsg::ForwardProposal(from, pid, key, value) => {
                         self.node
                             .tx
                             .send(UrMsg::ForwardProposal(from, pid, key, value))
@@ -279,7 +300,7 @@ impl UrSocket {
         Self {
             hb: Instant::now(),
             node,
-            remote_id: 0,
+            remote_id: NodeId(0),
         }
     }
 
@@ -310,17 +331,12 @@ impl UrSocket {
 
 #[derive(Clone)]
 struct Node {
-    id: u64,
+    id: NodeId,
     tx: Sender<UrMsg>,
     logger: Logger,
 }
 
-fn remote_endpoint(
-    _id: u64,
-    endpoint: String,
-    master: Sender<UrMsg>,
-    logger: Logger,
-) -> std::io::Result<()> {
+fn remote_endpoint(endpoint: String, master: Sender<UrMsg>, logger: Logger) -> std::io::Result<()> {
     loop {
         let sys = actix::System::new("ws-example");
         let endpoint1 = endpoint.clone();
@@ -343,7 +359,7 @@ fn remote_endpoint(
                         WsOfframpWorker::add_stream(stream, ctx);
                         WsOfframpWorker {
                             logger,
-                            remote_id: 0,
+                            remote_id: NodeId(0),
                             tx: master2,
                             sink: SinkWrite::new(sink, ctx),
                         }
@@ -359,7 +375,7 @@ fn remote_endpoint(
 
 pub struct WsOfframpWorker {
     //    my_id: u64,
-    remote_id: u64,
+    remote_id: NodeId,
     tx: Sender<UrMsg>,
     logger: Logger,
     sink: SinkWrite<SplitSink<Framed<BoxedSocket, AxCodec>>>,
@@ -393,7 +409,7 @@ impl Actor for WsOfframpWorker {
 
 #[derive(Message)]
 pub enum WsMessage {
-    Msg(HandshakeMsg),
+    Msg(CtrlMsg),
 }
 
 /// Handle stdin commands
@@ -445,15 +461,15 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
                 eat_error!(self.logger, self.sink.write(Message::Pong(data)));
             }
             Frame::Text(Some(data)) => {
-                let msg: HandshakeMsg = serde_json::from_slice(&data).unwrap();
+                let msg: CtrlMsg = serde_json::from_slice(&data).unwrap();
                 match msg {
-                    HandshakeMsg::Welcome(id, peer, peers) => {
+                    CtrlMsg::HelloAck(id, peer, peers) => {
                         self.remote_id = id;
                         self.tx
                             .send(UrMsg::RegisterLocal(id, peer, ctx.address(), peers))
                             .unwrap();
                     }
-                    HandshakeMsg::AckProposal(pid, success) => {
+                    CtrlMsg::AckProposal(pid, success) => {
                         self.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
                     }
                     _ => (),
@@ -504,30 +520,35 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum HandshakeMsg {
-    Hello(u64, String),
-    Welcome(u64, String, Vec<(u64, String)>),
+pub enum CtrlMsg {
+    Hello(NodeId, String),
+    HelloAck(NodeId, String, Vec<(NodeId, String)>),
     AckProposal(u64, bool),
-    ForwardProposal(u64, u64, Vec<u8>, Vec<u8>),
+    ForwardProposal(NodeId, u64, Vec<u8>, Vec<u8>),
+    Put(Vec<u8>, Vec<u8>),
 }
 
 pub enum UrMsg {
+    // Network related
     InitLocal(Addr<WsOfframpWorker>),
-    RegisterLocal(u64, String, Addr<WsOfframpWorker>, Vec<(u64, String)>),
-    RegisterRemote(u64, String, Addr<UrSocket>),
-    DownLocal(u64),
-    DownRemote(u64),
+    RegisterLocal(NodeId, String, Addr<WsOfframpWorker>, Vec<(NodeId, String)>),
+    RegisterRemote(NodeId, String, Addr<UrSocket>),
+    DownLocal(NodeId),
+    DownRemote(NodeId),
+
+    // Raft related
     AckProposal(u64, bool),
-    ForwardProposal(u64, u64, Vec<u8>, Vec<u8>),
+    ForwardProposal(NodeId, u64, Vec<u8>, Vec<u8>),
     RaftMsg(RaftMessage),
+    GetNode(NodeId, Sender<bool>),
+    AddNode(NodeId, Sender<bool>),
+
     Get(String, Sender<Option<String>>),
     Post(String, String, Sender<bool>),
-    GetNode(u64, Sender<bool>),
-    AddNode(u64, Sender<bool>),
 }
 
 fn loopy_thing(
-    id: u64,
+    id: NodeId,
     my_endpoint: String,
     bootstrap: bool,
     rx: Receiver<UrMsg>,
@@ -545,24 +566,21 @@ fn loopy_thing(
     };
     node.log();
 
-    let mut known_peers: HashMap<u64, String> = HashMap::new();
+    let mut known_peers: HashMap<NodeId, String> = HashMap::new();
     loop {
         thread::sleep(Duration::from_millis(10));
         loop {
             match rx.try_recv() {
                 Ok(UrMsg::GetNode(id, reply)) => {
                     info!(logger, "Getting node status"; "id" => id);
-                    let g = node.raft_group.as_ref().unwrap();
-                    reply
-                        .send(g.raft.prs().configuration().contains(id))
-                        .unwrap();
+
+                    reply.send(node.node_known(id)).unwrap();
                 }
                 Ok(UrMsg::AddNode(id, reply)) => {
                     info!(logger, "Adding node"; "id" => id);
-                    let g = node.raft_group.as_ref().unwrap();
-                    if node.is_leader() && !g.raft.prs().configuration().contains(id) {
+                    if node.is_leader() && !node.node_known(id) {
                         let mut conf_change = ConfChange::default();
-                        conf_change.node_id = id;
+                        conf_change.node_id = id.0;
                         conf_change.set_change_type(ConfChangeType::AddNode);
                         let proposal =
                             Proposal::conf_change(node.proposal_id, node.id, &conf_change);
@@ -642,10 +660,7 @@ fn loopy_thing(
                 Ok(UrMsg::InitLocal(endpoint)) => {
                     info!(&logger, "Initializing local endpoint");
                     endpoint
-                        .send(WsMessage::Msg(HandshakeMsg::Hello(
-                            node.id,
-                            my_endpoint.clone(),
-                        )))
+                        .send(WsMessage::Msg(CtrlMsg::Hello(node.id, my_endpoint.clone())))
                         .wait()
                         .unwrap();
                 }
@@ -657,9 +672,8 @@ fn loopy_thing(
                             if !known_peers.contains_key(&peer_id) {
                                 known_peers.insert(peer_id, peer.clone());
                                 let tx = tx.clone();
-                                let node_id = node.id;
                                 let logger = logger.clone();
-                                thread::spawn(move || remote_endpoint(node_id, peer, tx, logger));
+                                thread::spawn(move || remote_endpoint(peer, tx, logger));
                             }
                         }
                     }
@@ -672,19 +686,18 @@ fn loopy_thing(
                         if !known_peers.contains_key(&id) {
                             known_peers.insert(id, peer.clone());
                             let tx = tx.clone();
-                            let node_id = node.id;
                             let logger = logger.clone();
-                            thread::spawn(move || remote_endpoint(node_id, peer, tx, logger));
+                            thread::spawn(move || remote_endpoint(peer, tx, logger));
                         }
                         endpoint
                             .clone()
-                            .send(WsMessage::Msg(HandshakeMsg::Welcome(
+                            .send(WsMessage::Msg(CtrlMsg::HelloAck(
                                 node.id,
                                 my_endpoint.clone(),
                                 known_peers
                                     .clone()
                                     .into_iter()
-                                    .collect::<Vec<(u64, String)>>(),
+                                    .collect::<Vec<(NodeId, String)>>(),
                             )))
                             .wait()
                             .unwrap();
@@ -804,7 +817,7 @@ fn main() -> std::io::Result<()> {
     let bootstrap = matches.is_present("bootstrap");
     let (tx, rx) = bounded(100);
     let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
-    let id: u64 = matches.value_of("id").unwrap_or("1").parse().unwrap();
+    let id = NodeId(matches.value_of("id").unwrap_or("1").parse().unwrap());
     let my_endpoint = endpoint.to_string();
     let tx1 = tx.clone();
     let loop_logger = logger.clone();
@@ -813,7 +826,7 @@ fn main() -> std::io::Result<()> {
     for peer in peers {
         let logger = logger.clone();
         let tx = tx.clone();
-        thread::spawn(move || remote_endpoint(id, peer, tx, logger));
+        thread::spawn(move || remote_endpoint(peer, tx, logger));
     }
 
     let node = Node {
