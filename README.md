@@ -28,5 +28,11 @@ cargo run -- -e 127.0.0.1:8081 -i 1 -p 127.0.0.1:8082
 ### Alternate startup procedure
 
 ```bash
-PYTHONPATH=. ./bin/3u.py # spin up a nascent 3-node test cluster
+$ PYTHONPATH=. ./bin/3u.py # spin up a nascent 3-node test cluster
+```
+
+For dependencies ( if needed )
+
+```bash
+$ pip3 install -r ./requirements.txt
 ```
