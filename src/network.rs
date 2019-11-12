@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::*;
-use std::fmt;
-use std::io;
 pub mod ws;
+
+use crate::*;
 use crossbeam_channel::{Sender, TryRecvError};
 use raft::eraftpb::Message as RaftMessage;
+use std::{fmt, io};
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),

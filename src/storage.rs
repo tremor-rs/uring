@@ -16,9 +16,7 @@
 
 use crate::{NodeId, KV};
 use protobuf::Message;
-use raft::eraftpb::{ConfState, HardState};
-use raft::eraftpb::{Entry, Snapshot};
-use raft::storage::RaftState;
+use raft::prelude::*;
 pub use raft::storage::Storage as ReadStorage;
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
 use std::borrow::Borrow;
