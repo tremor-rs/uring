@@ -16,12 +16,9 @@ use super::*;
 use crate::storage::*;
 use crossbeam_channel::{Sender, TryRecvError};
 use protobuf::Message as PBMessage;
-use raft::eraftpb::ConfState;
-use raft::eraftpb::Message;
-use raft::{prelude::*, StateRole};
-use raft::{Error, Result};
+use raft::{prelude::*, Error, Result, StateRole};
 use slog::Logger;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 

@@ -552,6 +552,7 @@ impl WsOfframpWorker {
         });
     }
 }
+
 impl actix::io::WriteHandler<WsProtocolError> for WsOfframpWorker {}
 
 impl Actor for WsOfframpWorker {

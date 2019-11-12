@@ -18,18 +18,15 @@ pub mod errors;
 mod network;
 mod raft_node;
 mod storage;
+
 use crate::network::{ws, Network, RaftNetworkMsg};
+use crate::raft_node::*;
 use crate::storage::URRocksStorage;
 use clap::{App as ClApp, Arg};
-use raft::StateRole;
-use raft_node::*;
 use serde::{Deserialize, Serialize};
-use slog::Drain;
-use slog::{Key, Logger, Record, Value};
-use std::collections::HashMap;
-use std::fmt;
-use std::thread;
+use slog::{Drain, Key, Logger, Record, Value};
 use std::time::{Duration, Instant};
+use std::{fmt, thread};
 
 #[macro_use]
 extern crate slog;
@@ -63,14 +60,15 @@ pub struct KV {
 fn raft_loop<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logger) {
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut t1 = Instant::now();
-    let mut last_state = StateRole::PreCandidate;
     let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
         RaftNode::create_raft_leader(&logger, id, network)
     } else {
         RaftNode::create_raft_follower(&logger, id, network)
     };
+    node.set_raft_tick_duration(Duration::from_millis(100));
     node.log();
 
+    let mut last_state = node.role().clone();
     loop {
         thread::sleep(Duration::from_millis(10));
 
