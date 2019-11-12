@@ -748,11 +748,6 @@ fn loopy_thing(
 
         // Handle readies from the raft.
         node.on_ready().unwrap();
-
-        // Check control signals from
-        //        if check_signals(&rx_stop_clone) {
-        //           return;
-        //        };
     }
 }
 
