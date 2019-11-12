@@ -24,3 +24,9 @@ cargo run -- -e 127.0.0.1:8081 -i 1 -p 127.0.0.1:8082
 # kill  new leader
 ...
 ```
+
+### Alternate startup procedure
+
+```bash
+PYTHONPATH=. ./bin/3u.py # spin up a nascent 3-node test cluster
+```
