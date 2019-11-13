@@ -1,0 +1,138 @@
+- name: coyote
+  title: uring-3u-tests
+
+- name: Status
+  entries:
+    - name: GET /status on leader with id 1
+      command: curl -vs --stderr - http://localhost:8081/status
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - Leader
+    - name: GET /status on follower with id 2
+      command: curl -vs --stderr - http://localhost:8082/status
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - Follower
+    - name: GET /status on follower with id 3
+      command: curl -vs --stderr - http://localhost:8083/status
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - Follower
+
+- name: KV store on leader
+  entries:
+    - name: Get non-existent key/value on leader
+      command: curl -vs --stderr - http://localhost:8081/data/phantom
+      stdout_has:
+        - HTTP/1.1 404 Not Found
+
+    - name: Put fresh key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8081/data/beep --data-binary "{\"value\": \"boop\"}"
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Put idempotent key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8081/data/beep --data-binary '{"value": "boop"}'
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Get key/value on leader
+      command: curl -vs --stderr - http://localhost:8081/data/beep
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - "beep"
+        - "boop"
+
+- name: KV store on follower with id 2
+  entries:
+    - name: Get non-existent key/value on leader
+      command: curl -vs --stderr - http://localhost:8082/data/phantom
+      stdout_has:
+        - HTTP/1.1 404 Not Found
+
+    - name: Put fresh key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/beep --data-binary "{\"value\": \"boop\"}"
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Put idempotent key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/beep --data-binary '{"value": "boop"}'
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Get key/value on leader
+      command: curl -vs --stderr - http://localhost:8082/data/beep
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - "beep"
+        - "boop"
+    - name: CAS fresh key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: CAS idempotent key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Get key/value on leader
+      command: curl -vs --stderr - http://localhost:8082/data/meep
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - "meep"
+        - "snot"
+
+- name: KV store on follower with id 3
+  entries:
+    - name: Get non-existent key/value on leader
+      command: curl -vs --stderr - http://localhost:8083/data/phantom
+      stdout_has:
+        - HTTP/1.1 404 Not Found
+
+    - name: Put fresh key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/fleek --data-binary "{\"value\": \"boop\"}"
+      stdout_has:
+
+- name: KV store on follower with id 3
+  entries:
+    - name: Get non-existent key/value on leader
+      command: curl -vs --stderr - http://localhost:8083/data/phantom
+      stdout_has:
+        - HTTP/1.1 404 Not Found
+
+    - name: Put fresh key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/fleek --data-binary "{\"value\": \"boop\"}"
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Put idempotent key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/fleek --data-binary '{"value": "boop"}'
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Get key/value on leader
+      command: curl -vs --stderr - http://localhost:8083/data/fleek
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - "fleek"
+        - "boop"
+    - name: CAS fresh key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: CAS idempotent key/value on leader
+      command: |
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
+      stdout_has:
+        - HTTP/1.1 201 Created
+    - name: Get key/value on leader
+      command: curl -vs --stderr - http://localhost:8083/data/meep
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - "meep"
+        - "snot"
+
+

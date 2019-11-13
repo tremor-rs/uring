@@ -36,3 +36,17 @@ For dependencies ( if needed )
 ```bash
 $ pip3 install -r ./requirements.txt
 ```
+
+### Acceptance tests
+
+```bash
+$ go get -u github.com/landoop/coyote
+$ PYTHONPATH=. bin/3u.py
+$ coyote -c contrib/3u-test.yml
+```
+
+To view test report:
+
+```bash
+$ python -m SimpleHTTPServer
+$ open http://localhost:8000/coyote.html

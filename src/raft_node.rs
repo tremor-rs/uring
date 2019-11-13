@@ -540,7 +540,7 @@ where
                             }
                             self.pending_proposals.remove(&proposal.id);
                         } else {
-                            info!(self.logger, "Handling proposal(remopte)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
+                            info!(self.logger, "Handling proposal(remote)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
                             self.network
                                 .ack_proposal(proposal.proposer, proposal.id, true)
                                 .map_err(|e| {
