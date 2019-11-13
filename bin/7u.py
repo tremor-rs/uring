@@ -19,7 +19,7 @@ import contrib
 import simplejson
 import requests
 
-config_file = 'contrib/3u.json'
+config_file = 'contrib/7u.json'
 
 #
 # Simplistic script to spin up a 3 node raft cluster on localhost

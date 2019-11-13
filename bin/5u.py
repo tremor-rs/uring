@@ -19,10 +19,10 @@ import contrib
 import simplejson
 import requests
 
-config_file = 'contrib/3u.json'
+config_file = 'contrib/5u.json'
 
 #
-# Simplistic script to spin up a 3 node raft cluster on localhost
+# Simplistic script to spin up a 5 node raft cluster on localhost
 # - Resets storage as a side-effect
 # - Press any key to shutdown server
 #
@@ -32,6 +32,7 @@ cluster.configure(config_file)
 cluster.adjoin()
 
 for line in sys.stdin.readline():
+    print(line)
     for server in cluster.servers:
         print("Killing: {}".format(server.id))
         server.die()

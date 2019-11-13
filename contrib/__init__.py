@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys;
+import time;
 import os;
 import signal;
 import subprocess;
@@ -24,6 +26,51 @@ import simplejson;
 
 def rotate(arr):
      return arr[1:] + [arr[0]]
+
+class Cluster():
+    """Encapsulates a uring cluster"""
+
+    def __init__(self):
+        self.servers = []
+        self.clients = []
+        self.config = None
+
+    def configure(self, config_file):
+        self.config = simplejson.load(open(config_file, 'r'))
+        ports = [];
+        for node in self.config:
+            ports = ports + [node['port']]
+
+        for node in self.config:
+            port = node['port']
+            id = node['id']
+
+            rc = RaftClient()
+            rc.set_node_id(id)
+            rc.set_port(port)
+            rc.set_host("localhost")
+            self.clients.append(rc)
+
+            us = UringServer()
+            us.set_node_id(id)
+            us.set_node_ports(ports)
+            if id == '1':
+                us.set_bootstrap(True)
+            us.reset()
+            us.start()
+            self.servers.append(us)
+
+
+            ports = rotate(ports)
+
+            print('{}: {}'.format(id, port))
+
+    def adjoin(self):
+        time.sleep(10)
+        for node in self.config:
+            id = node['id']
+            if id != '1':
+                requests.post("http://localhost:8081/node/{}".format(id))
 
 class UringServer():
     """Handles interactions with uring (raft) instance."""
