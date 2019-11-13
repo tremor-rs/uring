@@ -50,3 +50,15 @@ To view test report:
 ```bash
 $ python -m SimpleHTTPServer
 $ open http://localhost:8000/coyote.html
+```
+
+### vnode
+
+
+```
+curl -H 'Content-Type: applicaiton/json' -X GET http://localhost:8081/mring
+curl -H 'Content-Type: applicaiton/json' -X POST -d '{"size":64}' http://localhost:8081/mring
+curl -H 'Content-Type: applicaiton/json' -X POST -d '{"node":"n1"}' http://localhost:8081/mring/node
+curl -H 'Content-Type: applicaiton/json' -X GET http://localhost:8081/mring/node
+curl -H 'Content-Type: applicaiton/json' -X POST -d '{"node":"n2"}' http://localhost:8081/mring/node
+```

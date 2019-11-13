@@ -23,6 +23,7 @@ pub mod storage;
 use crate::network::{ws, Network, RaftNetworkMsg};
 use crate::raft_node::*;
 use crate::service::kv::{Service as KVService, KV_SERVICE};
+use crate::service::vnode::{Service as VNodeService, VNODE_SERVICE};
 use crate::storage::URRocksStorage;
 use clap::{App as ClApp, Arg};
 use serde::{Deserialize, Serialize};
@@ -144,6 +145,8 @@ fn raft_loop<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logger
     node.log();
     let kv = KVService::new(0);
     node.add_service(KV_SERVICE, Box::new(kv));
+    let vnode: VNodeService<service::vnode::placement::Continuous> = VNodeService::new();
+    node.add_service(VNODE_SERVICE, Box::new(vnode));
 
     let mut last_state = node.role().clone();
     loop {

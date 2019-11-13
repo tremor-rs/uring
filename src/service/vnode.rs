@@ -15,17 +15,29 @@
 pub mod placement;
 use super::*;
 use crate::{storage, ServiceId};
+use byteorder::{BigEndian, ReadBytesExt};
 use bytes::BufMut;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
+use std::marker::PhantomData;
 
 pub const VNODE_SERVICE: ServiceId = ServiceId(1);
 
-pub struct Service {}
+pub struct Service<Placement>
+where
+    Placement: placement::Placement,
+{
+    marker: PhantomData<Placement>,
+}
 
-impl Service {
+impl<Placement> Service<Placement>
+where
+    Placement: placement::Placement,
+{
     pub fn new() -> Self {
-        Self {}
+        Self {
+            marker: PhantomData::default(),
+        }
     }
 }
 
@@ -33,6 +45,9 @@ impl Service {
 pub enum Event {
     GetSize,
     SetSize { size: u64 },
+    GetNodes,
+    AddNode { node: String },
+    RemoveNode { node: String },
 }
 
 impl Event {
@@ -42,18 +57,32 @@ impl Event {
     pub fn set_size(size: u64) -> Vec<u8> {
         serde_json::to_vec(&Event::SetSize { size }).unwrap()
     }
+    pub fn get_nodes() -> Vec<u8> {
+        serde_json::to_vec(&Event::GetNodes).unwrap()
+    }
+    pub fn add_node(node: String) -> Vec<u8> {
+        serde_json::to_vec(&Event::AddNode { node }).unwrap()
+    }
+    pub fn remove_node(node: String) -> Vec<u8> {
+        serde_json::to_vec(&Event::RemoveNode { node }).unwrap()
+    }
 }
 
 pub const RING_SIZE: &[u8; 9] = b"ring-size";
+pub const NODES: &[u8; 10] = b"ring-nodes";
 
-impl<Storage> super::Service<Storage> for Service
+impl<Storage, Placement> super::Service<Storage> for Service<Placement>
 where
     Storage: storage::Storage,
+    Placement: placement::Placement,
 {
     fn execute(&mut self, storage: &Storage, event: Vec<u8>) -> Result<Option<Vec<u8>>, Error> {
         match serde_json::from_slice(&event) {
             Ok(Event::GetSize) => Ok(storage.get(VNODE_SERVICE.0 as u16, RING_SIZE)),
             Ok(Event::SetSize { size }) => {
+                if let Some(data) = storage.get(VNODE_SERVICE.0 as u16, RING_SIZE) {
+                    return Ok(Some(data));
+                }
                 let mut data = vec![0; 8];
                 {
                     let mut data = Cursor::new(&mut data[..]);
@@ -61,16 +90,69 @@ where
                 }
                 storage.put(VNODE_SERVICE.0 as u16, RING_SIZE, &data);
 
-                Ok(Some(vec![]))
+                Ok(Some(data))
             }
-            _ => Err(Error::UnknownEvent),
+            Ok(Event::GetNodes) => Ok(storage.get(VNODE_SERVICE.0 as u16, NODES)),
+            Ok(Event::AddNode { node }) => {
+                let size = if let Some(size) = storage
+                    .get(VNODE_SERVICE.0 as u16, RING_SIZE)
+                    .and_then(|v| {
+                        let mut rdr = Cursor::new(v);
+                        rdr.read_u64::<BigEndian>().ok()
+                    }) {
+                    size
+                } else {
+                    return Ok(None);
+                };
+                let next = if let Some(current) = storage
+                    .get(VNODE_SERVICE.0 as u16, NODES)
+                    .and_then(|v| serde_json::from_slice(&v).ok())
+                {
+                    let (next, relocations) = Placement::add_node(size, current, node);
+                    dbg!(relocations);
+                    next
+                } else {
+                    Placement::new(size, node)
+                };
+                let next = serde_json::to_vec(&next).unwrap();
+                storage.put(VNODE_SERVICE.0 as u16, NODES, &next);
+                Ok(Some(next))
+            }
+            Ok(Event::RemoveNode { node }) => {
+                let size = if let Some(size) = storage
+                    .get(VNODE_SERVICE.0 as u16, RING_SIZE)
+                    .and_then(|v| {
+                        let mut rdr = Cursor::new(v);
+                        rdr.read_u64::<BigEndian>().ok()
+                    }) {
+                    size
+                } else {
+                    return Ok(None);
+                };
+                if let Some(current) = storage
+                    .get(VNODE_SERVICE.0 as u16, NODES)
+                    .and_then(|v| serde_json::from_slice(&v).ok())
+                {
+                    let (next, relocations) = Placement::remove_node(size, current, node);
+                    dbg!(relocations);
+                    let next = serde_json::to_vec(&next).unwrap();
+                    storage.put(VNODE_SERVICE.0 as u16, NODES, &next);
+                    Ok(Some(next))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(_) => Err(Error::UnknownEvent),
         }
     }
     fn is_local(&self, event: &[u8]) -> Result<bool, Error> {
         match serde_json::from_slice(&event) {
             Ok(Event::GetSize) => Ok(true),
+            Ok(Event::GetNodes) => Ok(true),
             Ok(Event::SetSize { .. }) => Ok(false),
-            _ => Err(Error::UnknownEvent),
+            Ok(Event::AddNode { .. }) => Ok(false),
+            Ok(Event::RemoveNode { .. }) => Ok(false),
+            Err(_) => Err(Error::UnknownEvent),
         }
     }
 }

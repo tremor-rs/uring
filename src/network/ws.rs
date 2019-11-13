@@ -15,6 +15,7 @@
 use super::{Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg, ServiceId};
 use crate::raft_node::RaftNodeStatus;
 use crate::service::kv::{Event as KVEvent, KV_SERVICE};
+use crate::service::vnode::{Event as VNodeEvent, VNODE_SERVICE};
 use crate::{NodeId, KV};
 use actix::io::SinkWrite;
 use actix::prelude::*;
@@ -29,6 +30,7 @@ use awc::{
     ws::{CloseCode, CloseReason, Codec as AxCodec, Frame, Message},
     BoxedSocket, Client,
 };
+use byteorder::{BigEndian, ReadBytesExt};
 use bytes::Bytes;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use futures::{
@@ -41,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
 use std::io;
+use std::io::Cursor;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -77,6 +80,44 @@ pub struct Network {
     tx: Sender<UrMsg>,
     next_eid: u64,
     pending: HashMap<EventId, Sender<Option<Vec<u8>>>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum CtrlMsg {
+    Hello(NodeId, String),
+    HelloAck(NodeId, String, Vec<(NodeId, String)>),
+    AckProposal(ProposalId, bool),
+    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
+}
+
+pub enum UrMsg {
+    // Network related
+    InitLocal(Addr<WsOfframpWorker>),
+    RegisterLocal(NodeId, String, Addr<WsOfframpWorker>, Vec<(NodeId, String)>),
+    RegisterRemote(NodeId, String, Addr<UrSocket>),
+    DownLocal(NodeId),
+    DownRemote(NodeId),
+    Status(Sender<RaftNodeStatus>),
+
+    // Raft related
+    AckProposal(ProposalId, bool),
+    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
+    RaftMsg(RaftMessage),
+    GetNode(NodeId, Sender<bool>),
+    AddNode(NodeId, Sender<bool>),
+
+    // KV related
+    Get(Vec<u8>, Sender<Option<Vec<u8>>>),
+    Post(Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
+    Cas(Vec<u8>, Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
+    Delete(Vec<u8>, Sender<Option<Vec<u8>>>),
+
+    // VNode
+    MRingSetSize(u64, Sender<Option<Vec<u8>>>),
+    MRingGetSize(Sender<Option<Vec<u8>>>),
+    MRingGetNodes(Sender<Option<Vec<u8>>>),
+    MRingAddNode(String, Sender<Option<Vec<u8>>>),
+    MRingRemoveNode(String, Sender<Option<Vec<u8>>>),
 }
 
 impl Network {
@@ -125,6 +166,16 @@ impl Network {
                             .route(web::get().to(get_node))
                             .route(web::post().to(post_node)),
                     )
+                    .service(
+                        web::resource("/mring")
+                            .route(web::get().to(get_mring_size))
+                            .route(web::post().to(set_mring_size)),
+                    )
+                    .service(
+                        web::resource("/mring/node")
+                            .route(web::get().to(get_mring_nodes))
+                            .route(web::post().to(add_mring_node)),
+                    )
                     // websocket route
                     .service(web::resource("/uring").route(web::get().to(uring_index)))
             })
@@ -149,6 +200,12 @@ impl Network {
             },
         )
     }
+    fn register_reply(&mut self, reply: Sender<Option<Vec<u8>>>) -> EventId {
+        let eid = EventId(self.next_eid);
+        self.next_eid += 1;
+        self.pending.insert(eid, reply);
+        eid
+    }
 }
 #[derive(Message)]
 pub(crate) struct RaftMsg(RaftMessage);
@@ -164,19 +221,55 @@ impl NetworkTrait for Network {
     fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError> {
         use RaftNetworkMsg::*;
         match self.rx.try_recv() {
+            Ok(UrMsg::MRingSetSize(size, reply)) => {
+                let eid = self.register_reply(reply);
+                Ok(RaftNetworkMsg::Event(
+                    eid,
+                    VNODE_SERVICE,
+                    VNodeEvent::set_size(size),
+                ))
+            }
+            Ok(UrMsg::MRingGetSize(reply)) => {
+                let eid = self.register_reply(reply);
+                Ok(RaftNetworkMsg::Event(
+                    eid,
+                    VNODE_SERVICE,
+                    VNodeEvent::get_size(),
+                ))
+            }
+            Ok(UrMsg::MRingGetNodes(reply)) => {
+                let eid = self.register_reply(reply);
+                Ok(RaftNetworkMsg::Event(
+                    eid,
+                    VNODE_SERVICE,
+                    VNodeEvent::get_nodes(),
+                ))
+            }
+            Ok(UrMsg::MRingAddNode(node, reply)) => {
+                let eid = self.register_reply(reply);
+                Ok(RaftNetworkMsg::Event(
+                    eid,
+                    VNODE_SERVICE,
+                    VNodeEvent::add_node(node),
+                ))
+            }
+            Ok(UrMsg::MRingRemoveNode(node, reply)) => {
+                let eid = self.register_reply(reply);
+                Ok(RaftNetworkMsg::Event(
+                    eid,
+                    VNODE_SERVICE,
+                    VNodeEvent::remove_node(node),
+                ))
+            }
             Ok(UrMsg::Status(reply)) => Ok(Status(reply)),
             Ok(UrMsg::GetNode(id, reply)) => Ok(GetNode(id, reply)),
             Ok(UrMsg::AddNode(id, reply)) => Ok(AddNode(id, reply)),
             Ok(UrMsg::Get(key, reply)) => {
-                let eid = EventId(self.next_eid);
-                self.next_eid += 1;
-                self.pending.insert(eid, reply);
+                let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(eid, KV_SERVICE, KVEvent::get(key)))
             }
             Ok(UrMsg::Post(key, value, reply)) => {
-                let eid = EventId(self.next_eid);
-                self.next_eid += 1;
-                self.pending.insert(eid, reply);
+                let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
                     KV_SERVICE,
@@ -184,9 +277,7 @@ impl NetworkTrait for Network {
                 ))
             }
             Ok(UrMsg::Cas(key, check_value, store_value, reply)) => {
-                let eid = EventId(self.next_eid);
-                self.next_eid += 1;
-                self.pending.insert(eid, reply);
+                let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
                     KV_SERVICE,
@@ -536,6 +627,79 @@ fn post_node(
     }
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct MRingSize {
+    size: u64,
+}
+fn get_mring_size(_r: HttpRequest, srv: web::Data<Node>) -> Result<HttpResponse, ActixError> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref().tx.send(UrMsg::MRingGetSize(tx)).unwrap();
+    if let Some(size) = rx.recv().unwrap().and_then(|data| {
+        let mut rdr = Cursor::new(data);
+        rdr.read_u64::<BigEndian>().ok()
+    }) {
+        Ok(HttpResponse::Ok().json(MRingSize { size }))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
+fn set_mring_size(
+    _r: HttpRequest,
+    body: web::Json<MRingSize>,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, ActixError> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref()
+        .tx
+        .send(UrMsg::MRingSetSize(body.size, tx))
+        .unwrap();
+    if let Some(size) = rx.recv().unwrap().and_then(|data| {
+        let mut rdr = Cursor::new(data);
+        rdr.read_u64::<BigEndian>().ok()
+    }) {
+        Ok(HttpResponse::Ok().json(MRingSize { size }))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
+fn get_mring_nodes(_r: HttpRequest, srv: web::Data<Node>) -> Result<HttpResponse, ActixError> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref().tx.send(UrMsg::MRingGetNodes(tx)).unwrap();
+    if let Some(data) = rx.recv().unwrap() {
+        Ok(HttpResponse::Ok()
+            .content_type("applicaiton/json")
+            .body(data))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct MRingNode {
+    node: String,
+}
+
+fn add_mring_node(
+    _r: HttpRequest,
+    body: web::Json<MRingNode>,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, ActixError> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref()
+        .tx
+        .send(UrMsg::MRingAddNode(body.node.clone(), tx))
+        .unwrap();
+    if let Some(data) = rx.recv().unwrap() {
+        Ok(HttpResponse::Ok()
+            .content_type("applicaiton/json")
+            .body(data))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
 /// websocket connection is long running connection, it easier
 /// to handle with an actor
 pub struct UrSocket {
@@ -806,38 +970,6 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
         eat_error!(self.logger, self.sink.write(Message::Close(None)));
         ctx.stop()
     }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub enum CtrlMsg {
-    Hello(NodeId, String),
-    HelloAck(NodeId, String, Vec<(NodeId, String)>),
-    AckProposal(ProposalId, bool),
-    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
-    Put(Vec<u8>, Vec<u8>),
-}
-
-pub enum UrMsg {
-    // Network related
-    InitLocal(Addr<WsOfframpWorker>),
-    RegisterLocal(NodeId, String, Addr<WsOfframpWorker>, Vec<(NodeId, String)>),
-    RegisterRemote(NodeId, String, Addr<UrSocket>),
-    DownLocal(NodeId),
-    DownRemote(NodeId),
-    Status(Sender<RaftNodeStatus>),
-
-    // Raft related
-    AckProposal(ProposalId, bool),
-    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
-    RaftMsg(RaftMessage),
-    GetNode(NodeId, Sender<bool>),
-    AddNode(NodeId, Sender<bool>),
-
-    // KV related
-    Get(Vec<u8>, Sender<Option<Vec<u8>>>),
-    Post(Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
-    Cas(Vec<u8>, Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
-    Delete(Vec<u8>, Sender<Option<Vec<u8>>>),
 }
 
 fn remote_endpoint(endpoint: String, master: Sender<UrMsg>, logger: Logger) -> std::io::Result<()> {
