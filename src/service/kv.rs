@@ -42,6 +42,9 @@ pub enum Event {
         check_value: Vec<u8>,
         store_value: Vec<u8>,
     },
+    Delete {
+        key: Vec<u8>,
+    },
 }
 
 impl Event {
@@ -58,6 +61,9 @@ impl Event {
             store_value,
         })
         .unwrap()
+    }
+    pub fn delete(key: Vec<u8>) -> Vec<u8> {
+        serde_json::to_vec(&Event::Delete { key }).unwrap()
     }
 }
 
@@ -80,6 +86,7 @@ where
                 storage.cas(self.scope, &key, &check_value, &store_value);
                 Ok(Some(store_value))
             }
+            Ok(Event::Delete { key }) => Ok(storage.delete(self.scope, &key)),
             _ => Err(Error::UnknownEvent),
         }
     }
@@ -88,6 +95,7 @@ where
             Ok(Event::Get { .. }) => Ok(true),
             Ok(Event::Post { .. }) => Ok(false),
             Ok(Event::Cas { .. }) => Ok(false),
+            Ok(Event::Delete { .. }) => Ok(false),
             _ => Err(Error::UnknownEvent),
         }
     }

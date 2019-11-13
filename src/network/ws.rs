@@ -113,7 +113,8 @@ impl Network {
                     .service(
                         web::resource("/data/{id}")
                             .route(web::get().to(get))
-                            .route(web::post().to(post)),
+                            .route(web::post().to(post))
+                            .route(web::delete().to(delete)),
                     )
                     .service(
                         web::resource("/data/{id}/cas") // FIXME use query param instead
@@ -191,6 +192,12 @@ impl NetworkTrait for Network {
                     KV_SERVICE,
                     KVEvent::cas(key, check_value, store_value),
                 ))
+            }
+            Ok(UrMsg::Delete(key, reply)) => {
+                let eid = EventId(self.next_eid);
+                self.next_eid += 1;
+                self.pending.insert(eid, reply);
+                Ok(RaftNetworkMsg::Event(eid, KV_SERVICE, KVEvent::delete(key)))
             }
             Ok(UrMsg::AckProposal(pid, success)) => Ok(AckProposal(pid, success)),
             Ok(UrMsg::ForwardProposal(from, pid, sid, data)) => {
@@ -459,6 +466,34 @@ fn cas(
         Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DeleteParams {
+    id: String,
+}
+
+fn delete(
+    _r: HttpRequest,
+    params: web::Path<DeleteParams>,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, ActixError> {
+    let (tx, rx) = bounded(1);
+    let key = params.id.clone();
+    srv.get_ref()
+        .tx
+        .send(UrMsg::Delete(key.clone().into_bytes(), tx))
+        .unwrap();
+    if let Some(value) = rx
+        .recv()
+        .ok()
+        .and_then(|v| v)
+        .and_then(|v| String::from_utf8(v).ok())
+    {
+        Ok(HttpResponse::Ok().json(KV { key, value }))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
     }
 }
 
@@ -802,6 +837,7 @@ pub enum UrMsg {
     Get(Vec<u8>, Sender<Option<Vec<u8>>>),
     Post(Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
     Cas(Vec<u8>, Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
+    Delete(Vec<u8>, Sender<Option<Vec<u8>>>),
 }
 
 fn remote_endpoint(endpoint: String, master: Sender<UrMsg>, logger: Logger) -> std::io::Result<()> {

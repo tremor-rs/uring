@@ -34,6 +34,7 @@ pub trait WriteStorage {
     fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
     fn put(&self, keyscope: u16, key: &[u8], value: &[u8]);
     fn cas(&self, keyscope: u16, key: &[u8], check_value: &[u8], store_value: &[u8]) -> bool;
+    fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
 }
 
 use rocksdb::{Direction, IteratorMode, WriteBatch, DB};
@@ -161,6 +162,17 @@ impl WriteStorage for URRocksStorage {
                     return true;
                 }
                 false
+            }
+        }
+    }
+    fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>> {
+        match self.get(scope, key) {
+            None => None,
+            Some(v) => {
+                let v = v.clone();
+                let key = make_data_key(scope, key);
+                self.backend.delete(key).unwrap();
+                Some(v)
             }
         }
     }
