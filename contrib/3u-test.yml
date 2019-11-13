@@ -1,7 +1,7 @@
 - name: coyote
   title: uring-3u-tests
 
-- name: Status
+- name: Status ( Pre-Conditions )
   entries:
     - name: GET /status on leader with id 1
       command: curl -vs --stderr - http://localhost:8081/status
@@ -135,4 +135,21 @@
         - "meep"
         - "snot"
 
+- name: Status ( Post-Conditions )
+  entries:
+    - name: GET /status on leader with id 1
+      command: curl -vs --stderr - http://localhost:8081/status
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - Leader
+    - name: GET /status on follower with id 2
+      command: curl -vs --stderr - http://localhost:8082/status
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - Follower
+    - name: GET /status on follower with id 3
+      command: curl -vs --stderr - http://localhost:8083/status
+      stdout_has:
+        - HTTP/1.1 200 OK
+        - Follower
 
