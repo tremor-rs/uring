@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod kv;
+pub mod vnode;
 use crate::storage;
 use std::{fmt, io};
 
