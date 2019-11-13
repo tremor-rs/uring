@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::{Error, Network as NetworkTrait, RaftNetworkMsg};
+use crate::raft_node::RaftNodeStatus;
 use crate::{NodeId, KV};
 use actix::io::SinkWrite;
 use actix::prelude::*;
@@ -105,6 +106,7 @@ impl Network {
                     .data(node.clone())
                     // enable logger
                     .wrap(middleware::Logger::default())
+                    .service(web::resource("/status").route(web::get().to(status)))
                     .service(
                         web::resource("/data/{id}")
                             .route(web::get().to(get))
@@ -145,6 +147,7 @@ impl NetworkTrait for Network {
     fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError> {
         use RaftNetworkMsg::*;
         match self.rx.try_recv() {
+            Ok(UrMsg::Status(reply)) => Ok(Status(reply)),
             Ok(UrMsg::GetNode(id, reply)) => Ok(GetNode(id, reply)),
             Ok(UrMsg::AddNode(id, reply)) => Ok(AddNode(id, reply)),
             Ok(UrMsg::Get(key, reply)) => Ok(Get(key, reply)),
@@ -226,7 +229,6 @@ impl NetworkTrait for Network {
                 }
                 self.try_recv()
             }
-
             Err(e) => Err(e),
         }
     }
@@ -309,6 +311,23 @@ fn uring_index(
 ) -> Result<HttpResponse, ActixError> {
     let res = ws::start(UrSocket::new(srv.get_ref().clone()), &r, stream);
     res
+}
+
+#[derive(Deserialize)]
+pub struct NoParams {}
+
+fn status(
+    _r: HttpRequest,
+    _params: web::Path<NoParams>,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, ActixError> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref().tx.send(UrMsg::Status(tx)).unwrap();
+    if let Some(value) = rx.recv().ok() {
+        Ok(HttpResponse::Ok().json(value))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
+    }
 }
 
 #[derive(Deserialize)]
@@ -695,6 +714,7 @@ pub enum UrMsg {
     RegisterRemote(NodeId, String, Addr<UrSocket>),
     DownLocal(NodeId),
     DownRemote(NodeId),
+    Status(Sender<RaftNodeStatus>),
 
     // Raft related
     AckProposal(u64, bool),

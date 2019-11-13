@@ -90,6 +90,12 @@ class RaftClient():
             raise RuntimeError('Handler for message type ' + msg_type + ' already registered')
         self.handlers[msg_type] = handler;
 
+    def status(self):
+        url = "http://{}:{}/status"
+        headers = { 'Content-type': 'application/json' }
+        response = requests.get(url.format(self.host, self.port), headers=headers);
+        return response
+
     def register(self):
         url = "http://{}:{}/node/{}"
         response = requests.post(url.format(self.host, self.port, self.node_id));

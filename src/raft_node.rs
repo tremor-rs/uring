@@ -17,6 +17,9 @@ use crate::storage::*;
 use crossbeam_channel::{Sender, TryRecvError};
 use protobuf::Message as PBMessage;
 use raft::{prelude::*, Error, Result, StateRole};
+use raft::eraftpb::ConfState;
+use raft::eraftpb::Message;
+use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -37,6 +40,18 @@ fn is_initial_msg(msg: &Message) -> bool {
     msg_type == MessageType::MsgRequestVote
         || msg_type == MessageType::MsgRequestPreVote
         || (msg_type == MessageType::MsgHeartbeat && msg.commit == 0)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RaftNodeStatus {
+    id: u64,
+    role: String,
+    promotable: bool,
+    pass_election_timeout: bool,
+    election_elapsed: usize,
+    randomized_election_timeout: usize,
+    term: u64,
+    last_index: u64,
 }
 
 impl<Storage, Network> fmt::Debug for RaftNode<Storage, Network>
@@ -108,6 +123,10 @@ where
     pub fn tick(&mut self) -> Result<()> {
         loop {
             match self.network.try_recv() {
+                Ok(RaftNetworkMsg::Status(reply)) => {
+                    info!(self.logger, "Getting node status");
+                    reply.send(self.status().unwrap()).unwrap();
+                }
                 Ok(RaftNetworkMsg::GetNode(id, reply)) => {
                     info!(self.logger, "Getting node status"; "id" => id);
                     reply.send(self.node_known(id)).unwrap();
@@ -223,6 +242,27 @@ where
         self.proposal_id += 1;
         pid
     }
+    pub fn status(&self) -> Result<RaftNodeStatus> {
+        if let Some(g) = self.raft_group.as_ref() {
+            Ok(RaftNodeStatus {
+                id: g.raft.id,
+                role: format!("{:?}", self.role()),
+                promotable: g.raft.promotable(),
+                pass_election_timeout: g.raft.pass_election_timeout(),
+                election_elapsed: g.raft.election_elapsed,
+                randomized_election_timeout: g.raft.randomized_election_timeout(),
+                term: g.raft.term,
+                last_index: g.raft.raft_log.store.last_index().unwrap_or(0),
+            })
+        } else {
+            error!(self.logger, "UNINITIALIZED NODE {}", self.id);
+            Err(Error::Io(IoError::new(
+                IoErrorKind::ConnectionAborted,
+                "Status unknown - not initialized".to_string(),
+            )))
+        }
+    }
+
     pub fn node_known(&self, id: NodeId) -> bool {
         self.raft_group
             .as_ref()

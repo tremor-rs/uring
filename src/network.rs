@@ -32,6 +32,7 @@ impl fmt::Display for Error {
 }
 
 pub enum RaftNetworkMsg {
+    Status(Sender<raft_node::RaftNodeStatus>),
     // Raft related
     AckProposal(u64, bool),
     ForwardProposal(NodeId, u64, Vec<u8>, Vec<u8>),
