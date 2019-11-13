@@ -165,4 +165,7 @@ class RaftClient():
         response = requests.post(url.format(self.host, self.port, k), v, headers=headers);
         return response
 
-
+    def delete(self,k):
+        url = "http://{}:{}/data/{}"
+        response = requests.delete(url.format(self.host, self.port, k));
+        return response
