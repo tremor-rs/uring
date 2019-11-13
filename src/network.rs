@@ -34,28 +34,27 @@ impl fmt::Display for Error {
 pub enum RaftNetworkMsg {
     Status(Sender<raft_node::RaftNodeStatus>),
     // Raft related
-    AckProposal(u64, bool),
-    ForwardProposal(NodeId, u64, Vec<u8>, Vec<u8>),
+    AckProposal(ProposalId, bool),
+    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
     GetNode(NodeId, Sender<bool>),
     AddNode(NodeId, Sender<bool>),
 
-    Get(Vec<u8>, Sender<Option<Vec<u8>>>),
-    Post(Vec<u8>, Vec<u8>, Sender<bool>),
-
+    Event(EventId, ServiceId, Vec<u8>),
     RaftMsg(RaftMessage),
 }
 
 pub trait Network {
     fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError>;
-    fn ack_proposal(&self, to: NodeId, pid: u64, success: bool) -> Result<(), Error>;
+    fn ack_proposal(&self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error>;
+    fn event_reply(&mut self, id: EventId, reply: Option<Vec<u8>>) -> Result<(), Error>;
     fn send_msg(&self, msg: RaftMessage) -> Result<(), Error>;
     fn connections(&self) -> Vec<NodeId>;
     fn forward_proposal(
         &self,
         from: NodeId,
         to: NodeId,
-        pid: u64,
-        key: Vec<u8>,
-        value: Vec<u8>,
+        pid: ProposalId,
+        sid: ServiceId,
+        data: Vec<u8>,
     ) -> Result<(), Error>;
 }

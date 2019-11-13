@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, Network as NetworkTrait, RaftNetworkMsg};
+use super::{Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg, ServiceId};
 use crate::raft_node::RaftNodeStatus;
+use crate::service::kv::{Event as KVEvent, KV_SERVICE};
 use crate::{NodeId, KV};
 use actix::io::SinkWrite;
 use actix::prelude::*;
@@ -74,6 +75,8 @@ pub struct Network {
     logger: Logger,
     rx: Receiver<UrMsg>,
     tx: Sender<UrMsg>,
+    next_eid: u64,
+    pending: HashMap<EventId, Sender<Option<Vec<u8>>>>,
 }
 
 impl Network {
@@ -136,6 +139,8 @@ impl Network {
                 known_peers: HashMap::new(),
                 rx,
                 tx,
+                next_eid: 0,
+                pending: HashMap::new(),
             },
         )
     }
@@ -144,17 +149,38 @@ impl Network {
 pub(crate) struct RaftMsg(RaftMessage);
 
 impl NetworkTrait for Network {
+    fn event_reply(&mut self, id: EventId, reply: Option<Vec<u8>>) -> Result<(), Error> {
+        if let Some(sender) = self.pending.remove(&id) {
+            sender.send(reply).unwrap();
+        }
+        Ok(())
+    }
+
     fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError> {
         use RaftNetworkMsg::*;
         match self.rx.try_recv() {
             Ok(UrMsg::Status(reply)) => Ok(Status(reply)),
             Ok(UrMsg::GetNode(id, reply)) => Ok(GetNode(id, reply)),
             Ok(UrMsg::AddNode(id, reply)) => Ok(AddNode(id, reply)),
-            Ok(UrMsg::Get(key, reply)) => Ok(Get(key, reply)),
-            Ok(UrMsg::Post(key, value, reply)) => Ok(Post(key, value, reply)),
+            Ok(UrMsg::Get(key, reply)) => {
+                let eid = EventId(self.next_eid);
+                self.next_eid += 1;
+                self.pending.insert(eid, reply);
+                Ok(RaftNetworkMsg::Event(eid, KV_SERVICE, KVEvent::get(key)))
+            }
+            Ok(UrMsg::Post(key, value, reply)) => {
+                let eid = EventId(self.next_eid);
+                self.next_eid += 1;
+                self.pending.insert(eid, reply);
+                Ok(RaftNetworkMsg::Event(
+                    eid,
+                    KV_SERVICE,
+                    KVEvent::post(key, value),
+                ))
+            }
             Ok(UrMsg::AckProposal(pid, success)) => Ok(AckProposal(pid, success)),
-            Ok(UrMsg::ForwardProposal(from, pid, key, value)) => {
-                Ok(ForwardProposal(from, pid, key, value))
+            Ok(UrMsg::ForwardProposal(from, pid, sid, data)) => {
+                Ok(ForwardProposal(from, pid, sid, data))
             }
             Ok(UrMsg::RaftMsg(msg)) => Ok(RaftMsg(msg)),
             // Connection handling of websocket connections
@@ -232,7 +258,7 @@ impl NetworkTrait for Network {
             Err(e) => Err(e),
         }
     }
-    fn ack_proposal(&self, to: NodeId, pid: u64, success: bool) -> Result<(), Error> {
+    fn ack_proposal(&self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error> {
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
                 .send(WsMessage::Msg(CtrlMsg::AckProposal(pid, success)))
@@ -282,11 +308,11 @@ impl NetworkTrait for Network {
         &self,
         from: NodeId,
         to: NodeId,
-        pid: u64,
-        key: Vec<u8>,
-        value: Vec<u8>,
+        pid: ProposalId,
+        sid: ServiceId,
+        data: Vec<u8>,
     ) -> Result<(), Error> {
-        let msg = WsMessage::Msg(CtrlMsg::ForwardProposal(from, pid, key, value));
+        let msg = WsMessage::Msg(CtrlMsg::ForwardProposal(from, pid, sid, data));
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
                 .send(msg)
@@ -380,7 +406,7 @@ fn post(
             tx,
         ))
         .unwrap();
-    if rx.recv().unwrap() {
+    if rx.recv().unwrap().is_some() {
         Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
@@ -702,8 +728,8 @@ impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
 pub enum CtrlMsg {
     Hello(NodeId, String),
     HelloAck(NodeId, String, Vec<(NodeId, String)>),
-    AckProposal(u64, bool),
-    ForwardProposal(NodeId, u64, Vec<u8>, Vec<u8>),
+    AckProposal(ProposalId, bool),
+    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
     Put(Vec<u8>, Vec<u8>),
 }
 
@@ -717,14 +743,14 @@ pub enum UrMsg {
     Status(Sender<RaftNodeStatus>),
 
     // Raft related
-    AckProposal(u64, bool),
-    ForwardProposal(NodeId, u64, Vec<u8>, Vec<u8>),
+    AckProposal(ProposalId, bool),
+    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
     RaftMsg(RaftMessage),
     GetNode(NodeId, Sender<bool>),
     AddNode(NodeId, Sender<bool>),
 
     Get(Vec<u8>, Sender<Option<Vec<u8>>>),
-    Post(Vec<u8>, Vec<u8>, Sender<bool>),
+    Post(Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
 }
 
 fn remote_endpoint(endpoint: String, master: Sender<UrMsg>, logger: Logger) -> std::io::Result<()> {

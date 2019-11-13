@@ -15,12 +15,14 @@
 mod codec;
 #[allow(unused)]
 pub mod errors;
-mod network;
-mod raft_node;
-mod storage;
+pub mod network;
+pub mod raft_node;
+pub mod service;
+pub mod storage;
 
 use crate::network::{ws, Network, RaftNetworkMsg};
 use crate::raft_node::*;
+use crate::service::kv::{Service as KVService, KV_SERVICE};
 use crate::storage::URRocksStorage;
 use clap::{App as ClApp, Arg};
 use serde::{Deserialize, Serialize};
@@ -51,10 +53,83 @@ impl fmt::Display for NodeId {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
+pub struct EventId(u64);
+
+impl Value for EventId {
+    fn serialize(
+        &self,
+        _rec: &Record,
+        key: Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64(key, self.0)
+    }
+}
+
+impl fmt::Display for EventId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Event({:?})", self)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
+pub struct ServiceId(u64);
+
+impl Value for ServiceId {
+    fn serialize(
+        &self,
+        _rec: &Record,
+        key: Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64(key, self.0)
+    }
+}
+
+impl fmt::Display for ServiceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Service({:?})", self)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
+pub struct ProposalId(u64);
+
+impl Value for ProposalId {
+    fn serialize(
+        &self,
+        _rec: &Record,
+        key: Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64(key, self.0)
+    }
+}
+
+impl fmt::Display for ProposalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Proposal({:?})", self)
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct KV {
     key: String,
     value: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Event {
+    sid: ServiceId,
+    data: Vec<u8>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct KVs {
+    scope: u16,
+    key: Vec<u8>,
+    value: Vec<u8>,
 }
 
 fn raft_loop<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logger) {
@@ -67,6 +142,8 @@ fn raft_loop<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logger
     };
     node.set_raft_tick_duration(Duration::from_millis(100));
     node.log();
+    let kv = KVService::new(0);
+    node.add_service(KV_SERVICE, Box::new(kv));
 
     let mut last_state = node.role().clone();
     loop {

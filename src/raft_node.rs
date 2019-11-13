@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use super::*;
+use crate::service::Service;
 use crate::storage::*;
-use crossbeam_channel::{Sender, TryRecvError};
+use crossbeam_channel::TryRecvError;
 use protobuf::Message as PBMessage;
-use raft::{prelude::*, Error, Result, StateRole};
 use raft::eraftpb::ConfState;
 use raft::eraftpb::Message;
+use raft::{prelude::*, Error, Result, StateRole};
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::{HashMap, VecDeque};
@@ -52,6 +53,24 @@ pub struct RaftNodeStatus {
     randomized_election_timeout: usize,
     term: u64,
     last_index: u64,
+}
+pub struct RaftNode<Storage, Network>
+where
+    Storage: storage::Storage,
+    Network: network::Network,
+{
+    logger: Logger,
+    // None if the raft is not initialized.
+    id: NodeId,
+    raft_group: Option<RawNode<Storage>>,
+    network: Network,
+    proposals: VecDeque<Proposal>,
+    pending_proposals: HashMap<ProposalId, Proposal>,
+    pending_acks: HashMap<ProposalId, EventId>,
+    proposal_id: u64,
+    timer: Instant,
+    tick_duration: Duration,
+    services: HashMap<ServiceId, Box<dyn Service<Storage>>>,
 }
 
 impl<Storage, Network> fmt::Debug for RaftNode<Storage, Network>
@@ -97,35 +116,41 @@ connections: {:?}
     }
 }
 
-pub struct RaftNode<Storage, Network>
-where
-    Storage: storage::Storage,
-    Network: network::Network,
-{
-    logger: Logger,
-    // None if the raft is not initialized.
-    id: NodeId,
-    raft_group: Option<RawNode<Storage>>,
-    network: Network,
-    proposals: VecDeque<Proposal>,
-    pending_proposals: HashMap<u64, Proposal>,
-    pending_acks: HashMap<u64, Sender<bool>>,
-    proposal_id: u64,
-    timer: Instant,
-    tick_duration: Duration,
-}
-
 impl<Storage, Network> RaftNode<Storage, Network>
 where
     Storage: storage::Storage,
     Network: network::Network,
 {
+    pub fn add_service(&mut self, sid: ServiceId, service: Box<dyn Service<Storage>>) {
+        self.services.insert(sid, service);
+    }
     pub fn tick(&mut self) -> Result<()> {
         loop {
             match self.network.try_recv() {
                 Ok(RaftNetworkMsg::Status(reply)) => {
                     info!(self.logger, "Getting node status");
                     reply.send(self.status().unwrap()).unwrap();
+                }
+                Ok(RaftNetworkMsg::Event(eid, sid, data)) => {
+                    if let Some(service) = self.services.get_mut(&sid) {
+                        if service.is_local(&data).unwrap() {
+                            let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
+                            let value = service.execute(store, data).unwrap();
+                            self.network.event_reply(eid, value).unwrap();
+                        } else {
+                            let pid = self.next_pid();
+                            let from = self.id;
+                            if let Err(e) = self.propose_event(from, pid, sid, data) {
+                                error!(self.logger, "Post forward error: {}", e);
+                                self.network.event_reply(eid, None).unwrap();
+                            } else {
+                                self.pending_acks.insert(pid, eid);
+                            }
+                        }
+                    } else {
+                        error!(self.logger, "Unknown Service: {}", sid);
+                        self.network.event_reply(eid, None).unwrap();
+                    }
                 }
                 Ok(RaftNetworkMsg::GetNode(id, reply)) => {
                     info!(self.logger, "Getting node status"; "id" => id);
@@ -135,21 +160,24 @@ where
                     info!(self.logger, "Adding node"; "id" => id);
                     reply.send(self.add_node(id)).unwrap();
                 }
-                Ok(RaftNetworkMsg::Get(key, reply)) => {
-                    let value = self.get_key(&key);
+                /*
+                Ok(RaftNetworkMsg::Get(eid, scope, key)) => {
+                    let value = self.get_key(scope, &key);
                     info!(self.logger, "Reading key"; "key" => String::from_utf8(key).ok());
-                    reply.send(value).unwrap();
+                    self.network.event_reply(eid, value).unwrap();
                 }
-                Ok(RaftNetworkMsg::Post(key, value, reply)) => {
+                Ok(RaftNetworkMsg::Post(eid, scope, key, value)) => {
                     let pid = self.next_pid();
                     let from = self.id;
-                    if let Err(e) = self.propose_kv(from, pid, key, value) {
+                    if let Err(e) = self.propose_kv(from, pid, scope, key, value) {
                         error!(self.logger, "Post forward error: {}", e);
-                        reply.send(false).unwrap();
+                        self.network.event_reply(eid, None).unwrap();
                     } else {
-                        self.pending_acks.insert(pid, reply.clone());
+                        self.pending_acks.insert(pid, eid);
                     }
+
                 }
+                */
                 Ok(RaftNetworkMsg::AckProposal(pid, success)) => {
                     info!(self.logger, "proposal acknowledged"; "pid" => pid);
                     if let Some(proposal) = self.pending_proposals.remove(&pid) {
@@ -157,12 +185,12 @@ where
                             self.proposals.push_back(proposal)
                         }
                     }
-                    if let Some(reply) = self.pending_acks.remove(&pid) {
-                        reply.send(success).unwrap();
+                    if let Some(eid) = self.pending_acks.remove(&pid) {
+                        self.network.event_reply(eid, Some(vec![])).unwrap();
                     }
                 }
-                Ok(RaftNetworkMsg::ForwardProposal(from, pid, key, value)) => {
-                    if let Err(e) = self.propose_kv(from, pid, key, value) {
+                Ok(RaftNetworkMsg::ForwardProposal(from, pid, sid, data)) => {
+                    if let Err(e) = self.propose_event(from, pid, sid, data) {
                         error!(self.logger, "Proposal forward error: {}", e);
                     }
                 }
@@ -200,20 +228,20 @@ where
 
         self.on_ready()
     }
-    pub fn propose_kv(
+    pub fn propose_event(
         &mut self,
         from: NodeId,
-        pid: u64,
-        key: Vec<u8>,
-        value: Vec<u8>,
+        pid: ProposalId,
+        sid: ServiceId,
+        data: Vec<u8>,
     ) -> Result<()> {
         if self.is_leader() {
             self.proposals
-                .push_back(Proposal::normal(pid, from, key, value));
+                .push_back(Proposal::normal(pid, from, sid, data));
             Ok(())
         } else {
             self.network
-                .forward_proposal(from, self.leader(), pid, key, value)
+                .forward_proposal(from, self.leader(), pid, sid, data)
                 .map_err(|e| {
                     Error::Io(IoError::new(
                         IoErrorKind::ConnectionAborted,
@@ -228,8 +256,8 @@ where
             let mut conf_change = ConfChange::default();
             conf_change.node_id = id.0;
             conf_change.set_change_type(ConfChangeType::AddNode);
-            let proposal = Proposal::conf_change(self.proposal_id, self.id, &conf_change);
-            self.proposal_id += 1;
+            let pid = self.next_pid();
+            let proposal = Proposal::conf_change(pid, self.id, &conf_change);
 
             self.proposals.push_back(proposal);
             true
@@ -237,10 +265,10 @@ where
             false
         }
     }
-    pub fn next_pid(&mut self) -> u64 {
+    pub fn next_pid(&mut self) -> ProposalId {
         let pid = self.proposal_id;
         self.proposal_id += 1;
-        pid
+        ProposalId(pid)
     }
     pub fn status(&self) -> Result<RaftNodeStatus> {
         if let Some(g) = self.raft_group.as_ref() {
@@ -298,25 +326,7 @@ where
             error!(self.logger, "UNINITIALIZED NODE {}", self.id)
         }
     }
-    pub fn get_key(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.raft_group
-            .as_ref()
-            .unwrap()
-            .raft
-            .raft_log
-            .store
-            .get(key)
-    }
-    pub fn put_key(&mut self, key: &[u8], value: &[u8]) -> bool {
-        self.raft_group
-            .as_ref()
-            .unwrap()
-            .raft
-            .raft_log
-            .store
-            .put(&key, value);
-        true
-    }
+
     pub fn is_running(&self) -> bool {
         self.raft_group.is_some()
     }
@@ -360,6 +370,7 @@ where
             proposal_id: 0,
             timer: Instant::now(),
             tick_duration: Duration::from_millis(100),
+            services: HashMap::new(),
         }
     }
 
@@ -387,6 +398,7 @@ where
             proposal_id: 0,
             timer: Instant::now(),
             tick_duration: Duration::from_millis(100),
+            services: HashMap::new(),
         }
     }
 
@@ -510,10 +522,11 @@ where
                 } else {
                     // For normal proposals, extract the key-value pair and then
                     // insert them into the kv engine.
-                    if let Ok(kv) = serde_json::from_slice::<KV>(&entry.data) {
-                        let k = base64::decode(&kv.key).unwrap();
-                        let v = base64::decode(&kv.value).unwrap();
-                        self.put_key(&k, &v);
+                    if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
+                        if let Some(service) = self.services.get_mut(&event.sid) {
+                            let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
+                            service.execute(&store, event.data).unwrap();
+                        }
                     }
                 }
                 if self.raft_group.as_ref().unwrap().raft.state == StateRole::Leader {
@@ -522,8 +535,8 @@ where
                     if let Some(proposal) = self.proposals.pop_front() {
                         if proposal.proposer == self.id {
                             info!(self.logger, "Handling proposal(local)"; "proposal-id" => proposal.id);
-                            if let Some(reply) = self.pending_acks.remove(&proposal.id) {
-                                reply.send(true).unwrap();
+                            if let Some(eid) = self.pending_acks.remove(&proposal.id) {
+                                self.network.event_reply(eid, Some(vec![])).unwrap();
                             }
                             self.pending_proposals.remove(&proposal.id);
                         } else {
@@ -585,12 +598,8 @@ where
     Storage: ReadStorage,
 {
     let last_index1 = raft_group.raft.raft_log.last_index() + 1;
-    if let Some((ref key, ref value)) = proposal.normal {
-        let data = serde_json::to_vec(&KV {
-            key: base64::encode(key),
-            value: base64::encode(value),
-        })
-        .unwrap();
+    if let Some(ref event) = proposal.normal {
+        let data = serde_json::to_vec(&event).unwrap();
         raft_group.propose(vec![], data)?;
     } else if let Some(ref cc) = proposal.conf_change {
         raft_group.propose_conf_change(vec![], cc.clone())?;
@@ -613,9 +622,9 @@ where
 }
 
 pub struct Proposal {
-    id: u64,
+    id: ProposalId,
     proposer: NodeId, // node id of the proposer
-    normal: Option<(Vec<u8>, Vec<u8>)>,
+    normal: Option<Event>,
     conf_change: Option<ConfChange>, // conf change.
     transfer_leader: Option<u64>,
     // If it's proposed, it will be set to the index of the entry.
@@ -623,7 +632,7 @@ pub struct Proposal {
 }
 
 impl Proposal {
-    pub fn conf_change(id: u64, proposer: NodeId, cc: &ConfChange) -> Self {
+    pub fn conf_change(id: ProposalId, proposer: NodeId, cc: &ConfChange) -> Self {
         Self {
             id,
             proposer,
@@ -634,11 +643,11 @@ impl Proposal {
         }
     }
     #[allow(dead_code)]
-    pub fn normal(id: u64, proposer: NodeId, key: Vec<u8>, value: Vec<u8>) -> Self {
+    pub fn normal(id: ProposalId, proposer: NodeId, sid: ServiceId, data: Vec<u8>) -> Self {
         Self {
             id,
             proposer,
-            normal: Some((key, value)),
+            normal: Some(Event { sid, data }),
             conf_change: None,
             transfer_leader: None,
             proposed: 0,

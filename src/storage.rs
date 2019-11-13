@@ -31,8 +31,8 @@ pub trait WriteStorage {
     fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()>;
     fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()>;
     fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()>;
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>>;
-    fn put(&self, key: &[u8], value: &[u8]);
+    fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
+    fn put(&self, keyscope: u16, key: &[u8], value: &[u8]);
 }
 
 use rocksdb::{Direction, IteratorMode, WriteBatch, DB};
@@ -140,12 +140,12 @@ impl URRocksStorage {
 }
 
 impl WriteStorage for URRocksStorage {
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        let key = make_data_key(KV, key);
+    fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>> {
+        let key = make_data_key(scope, key);
         self.backend.get(key).unwrap().map(|v| v.to_vec())
     }
-    fn put(&self, key: &[u8], value: &[u8]) {
-        let key = make_data_key(KV, key);
+    fn put(&self, scope: u16, key: &[u8], value: &[u8]) {
+        let key = make_data_key(scope, key);
         self.backend.put(key, value).unwrap();
     }
     fn apply_snapshot(&mut self, mut snapshot: Snapshot) -> RaftResult<()> {
@@ -373,8 +373,6 @@ fn make_log_key(idx: u64) -> [u8; 16] {
 
     key
 }
-
-const KV: u16 = 1;
 
 fn make_data_key(prefix: u16, key_s: &[u8]) -> Vec<u8> {
     use bytes::BufMut;
