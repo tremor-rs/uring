@@ -112,3 +112,10 @@ class RaftClient():
         response = requests.post(url.format(self.host, self.port, k), v, headers=headers);
         return response
 
+    def cas(self,k,v):
+        url = "http://{}:{}/data/{}/cas"
+        headers = { 'Content-type': 'application/json' }
+        response = requests.post(url.format(self.host, self.port, k), v, headers=headers);
+        return response
+
+

@@ -33,6 +33,7 @@ pub trait WriteStorage {
     fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()>;
     fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
     fn put(&self, keyscope: u16, key: &[u8], value: &[u8]);
+    fn cas(&self, keyscope: u16, key: &[u8], check_value: &[u8], store_value: &[u8]) -> bool;
 }
 
 use rocksdb::{Direction, IteratorMode, WriteBatch, DB};
@@ -147,6 +148,21 @@ impl WriteStorage for URRocksStorage {
     fn put(&self, scope: u16, key: &[u8], value: &[u8]) {
         let key = make_data_key(scope, key);
         self.backend.put(key, value).unwrap();
+    }
+    fn cas(&self, scope: u16, key: &[u8], check_value: &[u8], store_value: &[u8]) -> bool {
+        match self.get(scope, key) {
+            None => {
+                self.put(scope, key, store_value);
+                true
+            }
+            Some(value) => {
+                if value == check_value {
+                    self.put(scope, key, store_value);
+                    return true;
+                }
+                false
+            }
+        }
     }
     fn apply_snapshot(&mut self, mut snapshot: Snapshot) -> RaftResult<()> {
         let mut meta = snapshot.take_metadata();

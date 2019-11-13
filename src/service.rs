@@ -20,6 +20,7 @@ use std::{fmt, io};
 pub enum Error {
     Io(io::Error),
     Generic(String),
+    Kv(String),
     UnknownEvent,
 }
 impl std::error::Error for Error {}

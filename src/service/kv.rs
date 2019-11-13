@@ -30,8 +30,18 @@ impl Service {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
-    Get { key: Vec<u8> },
-    Post { key: Vec<u8>, value: Vec<u8> },
+    Get {
+        key: Vec<u8>,
+    },
+    Post {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    Cas {
+        key: Vec<u8>,
+        check_value: Vec<u8>,
+        store_value: Vec<u8>,
+    },
 }
 
 impl Event {
@@ -40,6 +50,14 @@ impl Event {
     }
     pub fn post(key: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
         serde_json::to_vec(&Event::Post { key, value }).unwrap()
+    }
+    pub fn cas(key: Vec<u8>, check_value: Vec<u8>, store_value: Vec<u8>) -> Vec<u8> {
+        serde_json::to_vec(&Event::Cas {
+            key,
+            check_value,
+            store_value,
+        })
+        .unwrap()
     }
 }
 
@@ -52,8 +70,15 @@ where
             Ok(Event::Get { key }) => Ok(storage.get(self.scope, &key)),
             Ok(Event::Post { key, value }) => {
                 storage.put(self.scope, &key, &value);
-
                 Ok(Some(value))
+            }
+            Ok(Event::Cas {
+                key,
+                check_value,
+                store_value,
+            }) => {
+                storage.cas(self.scope, &key, &check_value, &store_value);
+                Ok(Some(store_value))
             }
             _ => Err(Error::UnknownEvent),
         }
@@ -62,6 +87,7 @@ where
         match serde_json::from_slice(&event) {
             Ok(Event::Get { .. }) => Ok(true),
             Ok(Event::Post { .. }) => Ok(false),
+            Ok(Event::Cas { .. }) => Ok(false),
             _ => Err(Error::UnknownEvent),
         }
     }

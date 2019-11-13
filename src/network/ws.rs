@@ -116,6 +116,10 @@ impl Network {
                             .route(web::post().to(post)),
                     )
                     .service(
+                        web::resource("/data/{id}/cas") // FIXME use query param instead
+                            .route(web::post().to(cas)),
+                    )
+                    .service(
                         web::resource("/node/{id}")
                             .route(web::get().to(get_node))
                             .route(web::post().to(post_node)),
@@ -176,6 +180,16 @@ impl NetworkTrait for Network {
                     eid,
                     KV_SERVICE,
                     KVEvent::post(key, value),
+                ))
+            }
+            Ok(UrMsg::Cas(key, check_value, store_value, reply)) => {
+                let eid = EventId(self.next_eid);
+                self.next_eid += 1;
+                self.pending.insert(eid, reply);
+                Ok(RaftNetworkMsg::Event(
+                    eid,
+                    KV_SERVICE,
+                    KVEvent::cas(key, check_value, store_value),
                 ))
             }
             Ok(UrMsg::AckProposal(pid, success)) => Ok(AckProposal(pid, success)),
@@ -386,6 +400,11 @@ fn get(
 }
 
 #[derive(Deserialize)]
+pub struct PostParams {
+    id: String,
+}
+
+#[derive(Deserialize)]
 pub struct PostBody {
     value: String,
 }
@@ -393,7 +412,7 @@ pub struct PostBody {
 /// do websocket handshake and start `UrSocket` actor
 fn post(
     _r: HttpRequest,
-    params: web::Path<GetParams>,
+    params: web::Path<PostParams>,
     body: web::Json<PostBody>,
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, ActixError> {
@@ -406,6 +425,36 @@ fn post(
             tx,
         ))
         .unwrap();
+    if rx.recv().unwrap().is_some() {
+        Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
+    } else {
+        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CasBody {
+    check: String,
+    store: String,
+}
+
+fn cas(
+    _r: HttpRequest,
+    params: web::Path<PostParams>,
+    body: web::Json<CasBody>,
+    srv: web::Data<Node>,
+) -> Result<HttpResponse, ActixError> {
+    let (tx, rx) = bounded(1);
+    srv.get_ref()
+        .tx
+        .send(UrMsg::Cas(
+            params.id.clone().into_bytes(),
+            body.check.clone().into_bytes(),
+            body.store.clone().into_bytes(),
+            tx,
+        ))
+        .unwrap();
+    // FIXME improve status when check fails vs succeeds?
     if rx.recv().unwrap().is_some() {
         Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
     } else {
@@ -749,8 +798,10 @@ pub enum UrMsg {
     GetNode(NodeId, Sender<bool>),
     AddNode(NodeId, Sender<bool>),
 
+    // KV related
     Get(Vec<u8>, Sender<Option<Vec<u8>>>),
     Post(Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
+    Cas(Vec<u8>, Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
 }
 
 fn remote_endpoint(endpoint: String, master: Sender<UrMsg>, logger: Logger) -> std::io::Result<()> {
