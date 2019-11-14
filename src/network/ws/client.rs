@@ -13,6 +13,7 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 
+use super::server::{Protocol, ProtocolSelect};
 use super::*;
 use crate::NodeId;
 use actix::io::SinkWrite;
@@ -142,23 +143,34 @@ impl StreamHandler<Frame, WsProtocolError> for Connection {
                     let msg: ProtocolSelect =
                         eat_error_and_blow!(self.logger, serde_json::from_slice(&data));
                     match msg {
-                        ProtocolSelect::Selected(1, Protocol::URing) => {
+                        ProtocolSelect::Selected {
+                            rid: RequestId(1),
+                            protocol: Protocol::URing,
+                        } => {
                             self.handshake_done = true;
                             self.tx.send(UrMsg::InitLocal(ctx.address())).unwrap();
                         }
-                        ProtocolSelect::Selected(rid, proto) => {
+                        ProtocolSelect::Selected { rid, protocol } => {
                             error!(
                                 self.logger,
-                                "Wrong protocol select response: {} / {:?}", rid, proto
+                                "Wrong protocol select response: {} / {:?}", rid, protocol
                             );
                             ctx.stop();
                         }
-                        ProtocolSelect::Select(rid, protocol) => {
+                        ProtocolSelect::Select { rid, protocol } => {
                             error!(
                                 self.logger,
                                 "Select response not selected response for: {} / {:?}",
                                 rid,
                                 protocol
+                            );
+                            ctx.stop();
+                        }
+
+                        ProtocolSelect::As { protocol, .. } => {
+                            error!(
+                                self.logger,
+                                "as response not selected response for:  {:?}", protocol
                             );
                             ctx.stop();
                         }
@@ -227,8 +239,11 @@ pub(crate) fn remote_endpoint(
                         Connection::add_stream(stream, ctx);
                         let mut sink = SinkWrite::new(sink, ctx);
                         sink.write(Message::Text(
-                            serde_json::to_string(&ProtocolSelect::Select(1, Protocol::URing))
-                                .unwrap(),
+                            serde_json::to_string(&ProtocolSelect::Select {
+                                rid: RequestId(1),
+                                protocol: Protocol::URing,
+                            })
+                            .unwrap(),
                         ))
                         .unwrap();
                         Connection {

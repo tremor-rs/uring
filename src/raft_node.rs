@@ -140,7 +140,7 @@ where
                         } else {
                             let pid = self.next_pid();
                             let from = self.id;
-                            if let Err(e) = self.propose_event(from, pid, sid, data) {
+                            if let Err(e) = self.propose_event(from, pid, sid, eid, data) {
                                 error!(self.logger, "Post forward error: {}", e);
                                 self.network.event_reply(eid, None).unwrap();
                             } else {
@@ -190,7 +190,7 @@ where
                     }
                 }
                 Ok(RaftNetworkMsg::ForwardProposal(from, pid, sid, data)) => {
-                    if let Err(e) = self.propose_event(from, pid, sid, data) {
+                    if let Err(e) = self.propose_event(from, pid, sid, EventId(0), data) {
                         error!(self.logger, "Proposal forward error: {}", e);
                     }
                 }
@@ -233,11 +233,12 @@ where
         from: NodeId,
         pid: ProposalId,
         sid: ServiceId,
+        eid: EventId,
         data: Vec<u8>,
     ) -> Result<()> {
         if self.is_leader() {
             self.proposals
-                .push_back(Proposal::normal(pid, from, sid, data));
+                .push_back(Proposal::normal(pid, from, sid, eid, data));
             Ok(())
         } else {
             self.network
@@ -525,7 +526,10 @@ where
                     if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
                         if let Some(service) = self.services.get_mut(&event.sid) {
                             let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
-                            service.execute(&store, event.data).unwrap();
+                            let value = service.execute(&store, event.data).unwrap();
+                            if event.eid.0 != 0 {
+                                self.network.event_reply(event.eid, value).unwrap();
+                            }
                         }
                     }
                 }
@@ -643,11 +647,17 @@ impl Proposal {
         }
     }
     #[allow(dead_code)]
-    pub fn normal(id: ProposalId, proposer: NodeId, sid: ServiceId, data: Vec<u8>) -> Self {
+    pub fn normal(
+        id: ProposalId,
+        proposer: NodeId,
+        sid: ServiceId,
+        eid: EventId,
+        data: Vec<u8>,
+    ) -> Self {
         Self {
             id,
             proposer,
-            normal: Some(Event { sid, data }),
+            normal: Some(Event { eid, sid, data }),
             conf_change: None,
             transfer_leader: None,
             proposed: 0,

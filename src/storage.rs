@@ -153,8 +153,9 @@ impl WriteStorage for URRocksStorage {
     fn cas(&self, scope: u16, key: &[u8], check_value: &[u8], store_value: &[u8]) -> bool {
         match self.get(scope, key) {
             None => {
-                self.put(scope, key, store_value);
-                true
+                //self.put(scope, key, store_value);
+                //true
+                false
             }
             Some(value) => {
                 if value == check_value {

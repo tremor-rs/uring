@@ -19,7 +19,7 @@ use super::{Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg,
 use crate::raft_node::RaftNodeStatus;
 use crate::service::kv::{Event as KVEvent, KV_SERVICE};
 use crate::service::vnode::{Event as VNodeEvent, VNODE_SERVICE};
-use crate::NodeId;
+use crate::{NodeId, RequestId};
 use actix::prelude::*;
 use actix_web::{middleware, web, App, HttpServer};
 use bytes::Bytes;
@@ -27,6 +27,7 @@ use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use futures::Future;
 use raft::eraftpb::Message as RaftMessage;
 use serde::{Deserialize, Serialize};
+use server::WsReply;
 use slog::Logger;
 use std::collections::HashMap;
 use std::io;
@@ -58,27 +59,19 @@ pub struct Network {
     rx: Receiver<UrMsg>,
     tx: Sender<UrMsg>,
     next_eid: u64,
-    pending: HashMap<EventId, Sender<Option<Vec<u8>>>>,
+    pending: HashMap<EventId, Reply>,
 }
 
+pub(crate) enum Reply {
+    Direct(Sender<Option<Vec<u8>>>),
+    WS(RequestId, Addr<server::Connection>),
+}
 #[derive(Serialize, Deserialize, Debug)]
 pub enum CtrlMsg {
     Hello(NodeId, String),
     HelloAck(NodeId, String, Vec<(NodeId, String)>),
     AckProposal(ProposalId, bool),
     ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub enum Protocol {
-    URing,
-    KV,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub enum ProtocolSelect {
-    Select(u64, Protocol),
-    Selected(u64, Protocol),
 }
 
 pub(crate) enum UrMsg {
@@ -103,114 +96,35 @@ pub(crate) enum UrMsg {
     AddNode(NodeId, Sender<bool>),
 
     // KV related
-    Get(Vec<u8>, Sender<Option<Vec<u8>>>),
-    Post(Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
-    Cas(Vec<u8>, Vec<u8>, Vec<u8>, Sender<Option<Vec<u8>>>),
-    Delete(Vec<u8>, Sender<Option<Vec<u8>>>),
+    Get(Vec<u8>, Reply),
+    Put(Vec<u8>, Vec<u8>, Reply),
+    Cas(Vec<u8>, Vec<u8>, Vec<u8>, Reply),
+    Delete(Vec<u8>, Reply),
 
     // VNode
-    MRingSetSize(u64, Sender<Option<Vec<u8>>>),
-    MRingGetSize(Sender<Option<Vec<u8>>>),
-    MRingGetNodes(Sender<Option<Vec<u8>>>),
-    MRingAddNode(String, Sender<Option<Vec<u8>>>),
-    MRingRemoveNode(String, Sender<Option<Vec<u8>>>),
+    MRingSetSize(u64, Reply),
+    MRingGetSize(Reply),
+    MRingGetNodes(Reply),
+    MRingAddNode(String, Reply),
+    MRingRemoveNode(String, Reply),
 }
 
-impl Network {
-    pub fn new(
-        logger: &Logger,
-        id: NodeId,
-        endpoint: &str,
-        peers: Vec<String>,
-    ) -> (JoinHandle<Result<(), io::Error>>, Self) {
-        let (tx, rx) = bounded(100);
-
-        for peer in peers {
-            let logger = logger.clone();
-            let tx = tx.clone();
-            thread::spawn(move || client::remote_endpoint(peer, tx, logger));
-        }
-
-        let node = Node {
-            tx: tx.clone(),
-            id,
-            logger: logger.clone(),
-        };
-
-        let endpoint = endpoint.to_string();
-        let t_endpoint = endpoint.clone();
-
-        let handle = thread::spawn(move || {
-            HttpServer::new(move || {
-                App::new()
-                    .data(node.clone())
-                    // enable logger
-                    .wrap(middleware::Logger::default())
-                    .service(web::resource("/status").route(web::get().to(rest::status)))
-                    .service(
-                        web::resource("/data/{id}")
-                            .route(web::get().to(rest::get))
-                            .route(web::post().to(rest::post))
-                            .route(web::delete().to(rest::delete)),
-                    )
-                    .service(
-                        web::resource("/data/{id}/cas") // FIXME use query param instead
-                            .route(web::post().to(rest::cas)),
-                    )
-                    .service(
-                        web::resource("/node/{id}")
-                            .route(web::get().to(rest::get_node))
-                            .route(web::post().to(rest::post_node)),
-                    )
-                    .service(
-                        web::resource("/mring")
-                            .route(web::get().to(rest::get_mring_size))
-                            .route(web::post().to(rest::set_mring_size)),
-                    )
-                    .service(
-                        web::resource("/mring/node")
-                            .route(web::get().to(rest::get_mring_nodes))
-                            .route(web::post().to(rest::add_mring_node)),
-                    )
-                    // websocket route
-                    .service(web::resource("/uring").route(web::get().to(rest::uring_index)))
-            })
-            // start http server on 127.0.0.1:8080
-            .bind(t_endpoint)?
-            .run()
-        });
-
-        (
-            handle,
-            Self {
-                id,
-                endpoint,
-                logger: logger.clone(),
-                local_mailboxes: HashMap::new(),
-                remote_mailboxes: HashMap::new(),
-                known_peers: HashMap::new(),
-                rx,
-                tx,
-                next_eid: 0,
-                pending: HashMap::new(),
-            },
-        )
-    }
-    fn register_reply(&mut self, reply: Sender<Option<Vec<u8>>>) -> EventId {
-        let eid = EventId(self.next_eid);
-        self.next_eid += 1;
-        self.pending.insert(eid, reply);
-        eid
-    }
-}
 #[derive(Message)]
 pub(crate) struct RaftMsg(RaftMessage);
 
 impl NetworkTrait for Network {
-    fn event_reply(&mut self, id: EventId, reply: Option<Vec<u8>>) -> Result<(), Error> {
-        if let Some(sender) = self.pending.remove(&id) {
-            sender.send(reply).unwrap();
-        }
+    fn event_reply(&mut self, id: EventId, data: Option<Vec<u8>>) -> Result<(), Error> {
+        match self.pending.remove(&id) {
+            Some(Reply::WS(rid, sender)) => sender
+                .send(WsReply {
+                    rid,
+                    data: data.and_then(|d| serde_json::from_slice(&d).ok()),
+                })
+                .wait()
+                .unwrap(),
+            Some(Reply::Direct(sender)) => sender.send(data).unwrap(),
+            None => (),
+        };
         Ok(())
     }
 
@@ -264,12 +178,12 @@ impl NetworkTrait for Network {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(eid, KV_SERVICE, KVEvent::get(key)))
             }
-            Ok(UrMsg::Post(key, value, reply)) => {
+            Ok(UrMsg::Put(key, value, reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
                     KV_SERVICE,
-                    KVEvent::post(key, value),
+                    KVEvent::put(key, value),
                 ))
             }
             Ok(UrMsg::Cas(key, check_value, store_value, reply)) => {
@@ -281,9 +195,7 @@ impl NetworkTrait for Network {
                 ))
             }
             Ok(UrMsg::Delete(key, reply)) => {
-                let eid = EventId(self.next_eid);
-                self.next_eid += 1;
-                self.pending.insert(eid, reply);
+                let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(eid, KV_SERVICE, KVEvent::delete(key)))
             }
             Ok(UrMsg::AckProposal(pid, success)) => Ok(AckProposal(pid, success)),
@@ -469,4 +381,92 @@ fn encode_ws(msg: RaftMsg) -> Bytes {
 fn encode_ws(msg: RaftMsg) -> Bytes {
     use protobuf::Message;
     msg.0.write_to_bytes().unwrap().into()
+}
+
+impl Network {
+    pub fn new(
+        logger: &Logger,
+        id: NodeId,
+        endpoint: &str,
+        peers: Vec<String>,
+    ) -> (JoinHandle<Result<(), io::Error>>, Self) {
+        let (tx, rx) = bounded(100);
+
+        for peer in peers {
+            let logger = logger.clone();
+            let tx = tx.clone();
+            thread::spawn(move || client::remote_endpoint(peer, tx, logger));
+        }
+
+        let node = Node {
+            tx: tx.clone(),
+            id,
+            logger: logger.clone(),
+        };
+
+        let endpoint = endpoint.to_string();
+        let t_endpoint = endpoint.clone();
+
+        let handle = thread::spawn(move || {
+            HttpServer::new(move || {
+                App::new()
+                    .data(node.clone())
+                    // enable logger
+                    .wrap(middleware::Logger::default())
+                    .service(web::resource("/status").route(web::get().to(rest::status)))
+                    .service(
+                        web::resource("/data/{id}")
+                            .route(web::get().to(rest::get))
+                            .route(web::post().to(rest::post))
+                            .route(web::delete().to(rest::delete)),
+                    )
+                    .service(
+                        web::resource("/data/{id}/cas") // FIXME use query param instead
+                            .route(web::post().to(rest::cas)),
+                    )
+                    .service(
+                        web::resource("/node/{id}")
+                            .route(web::get().to(rest::get_node))
+                            .route(web::post().to(rest::post_node)),
+                    )
+                    .service(
+                        web::resource("/mring")
+                            .route(web::get().to(rest::get_mring_size))
+                            .route(web::post().to(rest::set_mring_size)),
+                    )
+                    .service(
+                        web::resource("/mring/node")
+                            .route(web::get().to(rest::get_mring_nodes))
+                            .route(web::post().to(rest::add_mring_node)),
+                    )
+                    // websocket route
+                    .service(web::resource("/uring").route(web::get().to(rest::uring_index)))
+            })
+            // start http server on 127.0.0.1:8080
+            .bind(t_endpoint)?
+            .run()
+        });
+
+        (
+            handle,
+            Self {
+                id,
+                endpoint,
+                logger: logger.clone(),
+                local_mailboxes: HashMap::new(),
+                remote_mailboxes: HashMap::new(),
+                known_peers: HashMap::new(),
+                rx,
+                tx,
+                next_eid: 1,
+                pending: HashMap::new(),
+            },
+        )
+    }
+    fn register_reply(&mut self, reply: Reply) -> EventId {
+        let eid = EventId(self.next_eid);
+        self.next_eid += 1;
+        self.pending.insert(eid, reply);
+        eid
+    }
 }

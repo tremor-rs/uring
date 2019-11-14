@@ -55,6 +55,26 @@ impl fmt::Display for NodeId {
 }
 
 #[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
+pub struct RequestId(u64);
+
+impl Value for RequestId {
+    fn serialize(
+        &self,
+        _rec: &Record,
+        key: Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64(key, self.0)
+    }
+}
+
+impl fmt::Display for RequestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Request({:?})", self)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
 pub struct EventId(u64);
 
 impl Value for EventId {
@@ -123,6 +143,7 @@ pub struct KV {
 #[derive(Deserialize, Serialize)]
 pub struct Event {
     sid: ServiceId,
+    eid: EventId,
     data: Vec<u8>,
 }
 

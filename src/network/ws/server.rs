@@ -14,9 +14,63 @@
 // use crate::{NodeId, KV};
 
 use super::*;
-use crate::NodeId;
+use crate::{NodeId, RequestId};
 use actix::prelude::*;
 use actix_web_actors::ws;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum Protocol {
+    URing,
+    KV,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ProtocolSelect {
+    Select {
+        rid: RequestId,
+        protocol: Protocol,
+    },
+    Selected {
+        rid: RequestId,
+        protocol: Protocol,
+    },
+    As {
+        protocol: Protocol,
+        cmd: serde_json::Value,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) enum KVRequest {
+    Get {
+        rid: RequestId,
+        key: String,
+    },
+    Put {
+        rid: RequestId,
+        key: String,
+        store: String,
+    },
+    Delete {
+        rid: RequestId,
+        key: String,
+    },
+    Cas {
+        rid: RequestId,
+        key: String,
+        check: String,
+        store: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) enum MRRequest {
+    SetSize { rid: RequestId, size: u64 },
+    GetSize { rid: RequestId },
+    GetNodes { rid: RequestId },
+    AddSize { rid: RequestId, node: String },
+    RemoveNode { rid: RequestId, node: String },
+}
 
 /// websocket connection is long running connection, it easier
 /// to handle with an actor
@@ -45,6 +99,13 @@ impl Actor for Connection {
     }
 }
 
+#[derive(Message, Serialize)]
+pub(crate) struct WsReply {
+    pub rid: RequestId,
+    pub data: Option<serde_json::Value>,
+}
+
+/// Handler for `ws::Message`
 /// Handler for `ws::Message`
 impl StreamHandler<ws::Message, ws::ProtocolError> for Connection {
     fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
@@ -52,6 +113,17 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for Connection {
             None => self.handle_initial(msg, ctx),
             Some(Protocol::URing) => self.handle_uring(msg, ctx),
             Some(Protocol::KV) => self.handle_kv(msg, ctx),
+        }
+    }
+}
+
+impl Handler<WsReply> for Connection {
+    type Result = ();
+    fn handle(&mut self, msg: WsReply, ctx: &mut Self::Context) {
+        match self.protocol {
+            None => ctx.text(serde_json::to_string(&msg).unwrap()),
+            Some(Protocol::URing) => ctx.stop(),
+            Some(Protocol::KV) => ctx.text(serde_json::to_string(&msg).unwrap()),
         }
     }
 }
@@ -97,16 +169,20 @@ impl Connection {
             ws::Message::Text(text) => {
                 let msg: ProtocolSelect = serde_json::from_str(&text).unwrap();
                 match msg {
-                    ProtocolSelect::Select(rid, protocol) => {
+                    ProtocolSelect::Select { rid, protocol } => {
                         self.protocol = Some(protocol);
                         ctx.text(
-                            serde_json::to_string(&ProtocolSelect::Selected(rid, protocol))
+                            serde_json::to_string(&ProtocolSelect::Selected { rid, protocol })
                                 .unwrap(),
                         );
                     }
-                    ProtocolSelect::Selected(_, _) => {
+                    ProtocolSelect::Selected { .. } => {
                         ctx.stop();
                     }
+                    ProtocolSelect::As { protocol, cmd } => match protocol {
+                        Protocol::KV => self.handle_kv2(serde_json::from_value(cmd).unwrap(), ctx),
+                        _ => ctx.stop(),
+                    },
                 }
 
                 //ctx.text(text)
@@ -164,7 +240,71 @@ impl Connection {
         }
     }
 
-    fn handle_kv(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {}
+    fn handle_kv(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
+        match msg {
+            ws::Message::Ping(msg) => {
+                self.hb = Instant::now();
+                ctx.pong(&msg);
+            }
+            ws::Message::Pong(_) => {
+                self.hb = Instant::now();
+            }
+            ws::Message::Text(text) => self.handle_kv2(serde_json::from_str(&text).unwrap(), ctx),
+            ws::Message::Binary(_) => {
+                ctx.stop();
+            }
+            ws::Message::Close(_) => {
+                ctx.stop();
+            }
+            ws::Message::Nop => (),
+        }
+    }
+
+    fn handle_kv2(&mut self, msg: KVRequest, ctx: &mut ws::WebsocketContext<Self>) {
+        match msg {
+            KVRequest::Get { rid, key } => {
+                self.node
+                    .tx
+                    .send(UrMsg::Get(key.into_bytes(), Reply::WS(rid, ctx.address())))
+                    .unwrap();
+            }
+            KVRequest::Put { rid, key, store } => {
+                self.node
+                    .tx
+                    .send(UrMsg::Put(
+                        key.into_bytes(),
+                        store.into_bytes(),
+                        Reply::WS(rid, ctx.address()),
+                    ))
+                    .unwrap();
+            }
+            KVRequest::Delete { rid, key } => {
+                self.node
+                    .tx
+                    .send(UrMsg::Delete(
+                        key.into_bytes(),
+                        Reply::WS(rid, ctx.address()),
+                    ))
+                    .unwrap();
+            }
+            KVRequest::Cas {
+                rid,
+                key,
+                check,
+                store,
+            } => {
+                self.node
+                    .tx
+                    .send(UrMsg::Cas(
+                        key.into_bytes(),
+                        check.into_bytes(),
+                        store.into_bytes(),
+                        Reply::WS(rid, ctx.address()),
+                    ))
+                    .unwrap();
+            }
+        }
+    }
 
     /// helper method that sends ping to client every second.
     ///

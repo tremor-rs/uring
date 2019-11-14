@@ -33,7 +33,7 @@ pub enum Event {
     Get {
         key: Vec<u8>,
     },
-    Post {
+    Put {
         key: Vec<u8>,
         value: Vec<u8>,
     },
@@ -51,8 +51,8 @@ impl Event {
     pub fn get(key: Vec<u8>) -> Vec<u8> {
         serde_json::to_vec(&Event::Get { key }).unwrap()
     }
-    pub fn post(key: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
-        serde_json::to_vec(&Event::Post { key, value }).unwrap()
+    pub fn put(key: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
+        serde_json::to_vec(&Event::Put { key, value }).unwrap()
     }
     pub fn cas(key: Vec<u8>, check_value: Vec<u8>, store_value: Vec<u8>) -> Vec<u8> {
         serde_json::to_vec(&Event::Cas {
@@ -73,10 +73,16 @@ where
 {
     fn execute(&mut self, storage: &Storage, event: Vec<u8>) -> Result<Option<Vec<u8>>, Error> {
         match serde_json::from_slice(&event) {
-            Ok(Event::Get { key }) => Ok(storage.get(self.scope, &key)),
-            Ok(Event::Post { key, value }) => {
+            Ok(Event::Get { key }) => Ok(storage
+                .get(self.scope, &key)
+                .and_then(|v| String::from_utf8(v).ok())
+                .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())),
+            Ok(Event::Put { key, value }) => {
+                let old = storage.get(self.scope, &key);
                 storage.put(self.scope, &key, &value);
-                Ok(Some(value))
+                Ok(old
+                    .and_then(|value| String::from_utf8(value).ok())
+                    .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
             }
             Ok(Event::Cas {
                 key,
@@ -84,16 +90,21 @@ where
                 store_value,
             }) => {
                 storage.cas(self.scope, &key, &check_value, &store_value);
-                Ok(Some(store_value))
+                Ok(String::from_utf8(store_value)
+                    .ok()
+                    .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
             }
-            Ok(Event::Delete { key }) => Ok(storage.delete(self.scope, &key)),
+            Ok(Event::Delete { key }) => Ok(storage
+                .delete(self.scope, &key)
+                .and_then(|v| String::from_utf8(v).ok())
+                .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())),
             _ => Err(Error::UnknownEvent),
         }
     }
     fn is_local(&self, event: &[u8]) -> Result<bool, Error> {
         match serde_json::from_slice(&event) {
             Ok(Event::Get { .. }) => Ok(true),
-            Ok(Event::Post { .. }) => Ok(false),
+            Ok(Event::Put { .. }) => Ok(false),
             Ok(Event::Cas { .. }) => Ok(false),
             Ok(Event::Delete { .. }) => Ok(false),
             _ => Err(Error::UnknownEvent),

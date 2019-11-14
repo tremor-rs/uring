@@ -65,7 +65,7 @@ pub(crate) fn get(
     let key = params.id.clone();
     srv.get_ref()
         .tx
-        .send(UrMsg::Get(key.clone().into_bytes(), tx))
+        .send(UrMsg::Get(key.clone().into_bytes(), Reply::Direct(tx)))
         .unwrap();
     if let Some(value) = rx
         .recv()
@@ -99,10 +99,10 @@ pub(crate) fn post(
     let (tx, rx) = bounded(1);
     srv.get_ref()
         .tx
-        .send(UrMsg::Post(
+        .send(UrMsg::Put(
             params.id.clone().into_bytes(),
             body.value.clone().into_bytes(),
-            tx,
+            Reply::Direct(tx),
         ))
         .unwrap();
     if rx.recv().unwrap().is_some() {
@@ -131,7 +131,7 @@ pub(crate) fn cas(
             params.id.clone().into_bytes(),
             body.check.clone().into_bytes(),
             body.store.clone().into_bytes(),
-            tx,
+            Reply::Direct(tx),
         ))
         .unwrap();
     // FIXME improve status when check fails vs succeeds?
@@ -156,7 +156,7 @@ pub(crate) fn delete(
     let key = params.id.clone();
     srv.get_ref()
         .tx
-        .send(UrMsg::Delete(key.clone().into_bytes(), tx))
+        .send(UrMsg::Delete(key.clone().into_bytes(), Reply::Direct(tx)))
         .unwrap();
     if let Some(value) = rx
         .recv()
@@ -218,7 +218,10 @@ pub(crate) fn get_mring_size(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, ActixError> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::MRingGetSize(tx)).unwrap();
+    srv.get_ref()
+        .tx
+        .send(UrMsg::MRingGetSize(Reply::Direct(tx)))
+        .unwrap();
     if let Some(size) = rx.recv().unwrap().and_then(|data| {
         let mut rdr = Cursor::new(data);
         rdr.read_u64::<BigEndian>().ok()
@@ -237,7 +240,7 @@ pub(crate) fn set_mring_size(
     let (tx, rx) = bounded(1);
     srv.get_ref()
         .tx
-        .send(UrMsg::MRingSetSize(body.size, tx))
+        .send(UrMsg::MRingSetSize(body.size, Reply::Direct(tx)))
         .unwrap();
     if let Some(size) = rx.recv().unwrap().and_then(|data| {
         let mut rdr = Cursor::new(data);
@@ -254,7 +257,10 @@ pub(crate) fn get_mring_nodes(
     srv: web::Data<Node>,
 ) -> Result<HttpResponse, ActixError> {
     let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::MRingGetNodes(tx)).unwrap();
+    srv.get_ref()
+        .tx
+        .send(UrMsg::MRingGetNodes(Reply::Direct(tx)))
+        .unwrap();
     if let Some(data) = rx.recv().unwrap() {
         Ok(HttpResponse::Ok()
             .content_type("applicaiton/json")
@@ -277,7 +283,7 @@ pub(crate) fn add_mring_node(
     let (tx, rx) = bounded(1);
     srv.get_ref()
         .tx
-        .send(UrMsg::MRingAddNode(body.node.clone(), tx))
+        .send(UrMsg::MRingAddNode(body.node.clone(), Reply::Direct(tx)))
         .unwrap();
     if let Some(data) = rx.recv().unwrap() {
         Ok(HttpResponse::Ok()
