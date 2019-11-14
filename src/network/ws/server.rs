@@ -26,6 +26,7 @@ pub(crate) struct Connection {
     hb: Instant,
     node: Node,
     remote_id: NodeId,
+    protocol: Option<Protocol>,
 }
 
 impl Actor for Connection {
@@ -47,47 +48,10 @@ impl Actor for Connection {
 /// Handler for `ws::Message`
 impl StreamHandler<ws::Message, ws::ProtocolError> for Connection {
     fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
-        // process websocket messages
-        match msg {
-            ws::Message::Ping(msg) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
-            }
-            ws::Message::Pong(_) => {
-                self.hb = Instant::now();
-            }
-            ws::Message::Text(text) => {
-                let msg: CtrlMsg = serde_json::from_str(&text).unwrap();
-                match msg {
-                    CtrlMsg::Hello(id, peer) => {
-                        self.remote_id = id;
-                        self.node
-                            .tx
-                            .send(UrMsg::RegisterRemote(id, peer, ctx.address()))
-                            .unwrap();
-                    }
-                    CtrlMsg::AckProposal(pid, success) => {
-                        self.node.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
-                    }
-                    CtrlMsg::ForwardProposal(from, pid, key, value) => {
-                        self.node
-                            .tx
-                            .send(UrMsg::ForwardProposal(from, pid, key, value))
-                            .unwrap();
-                    }
-                    _ => (),
-                }
-
-                //ctx.text(text)
-            }
-            ws::Message::Binary(bin) => {
-                let msg = decode_ws(&bin);
-                self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
-            }
-            ws::Message::Close(_) => {
-                ctx.stop();
-            }
-            ws::Message::Nop => (),
+        match self.protocol {
+            None => self.handle_initial(msg, ctx),
+            Some(Protocol::URing) => self.handle_uring(msg, ctx),
+            Some(Protocol::KV) => self.handle_kv(msg, ctx),
         }
     }
 }
@@ -117,8 +81,90 @@ impl Connection {
             hb: Instant::now(),
             node,
             remote_id: NodeId(0),
+            protocol: None,
         }
     }
+
+    fn handle_initial(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
+        match msg {
+            ws::Message::Ping(msg) => {
+                self.hb = Instant::now();
+                ctx.pong(&msg);
+            }
+            ws::Message::Pong(_) => {
+                self.hb = Instant::now();
+            }
+            ws::Message::Text(text) => {
+                let msg: ProtocolSelect = serde_json::from_str(&text).unwrap();
+                match msg {
+                    ProtocolSelect::Select(rid, protocol) => {
+                        self.protocol = Some(protocol);
+                        ctx.text(
+                            serde_json::to_string(&ProtocolSelect::Selected(rid, protocol))
+                                .unwrap(),
+                        );
+                    }
+                    ProtocolSelect::Selected(_, _) => {
+                        ctx.stop();
+                    }
+                }
+
+                //ctx.text(text)
+            }
+            ws::Message::Binary(_) => {
+                ctx.stop();
+            }
+            ws::Message::Close(_) => {
+                ctx.stop();
+            }
+            ws::Message::Nop => (),
+        }
+    }
+
+    fn handle_uring(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
+        match msg {
+            ws::Message::Ping(msg) => {
+                self.hb = Instant::now();
+                ctx.pong(&msg);
+            }
+            ws::Message::Pong(_) => {
+                self.hb = Instant::now();
+            }
+            ws::Message::Text(text) => {
+                let msg: CtrlMsg = serde_json::from_str(&text).unwrap();
+                match msg {
+                    CtrlMsg::Hello(id, peer) => {
+                        self.remote_id = id;
+                        self.node
+                            .tx
+                            .send(UrMsg::RegisterRemote(id, peer, ctx.address()))
+                            .unwrap();
+                    }
+                    CtrlMsg::AckProposal(pid, success) => {
+                        self.node.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
+                    }
+                    CtrlMsg::ForwardProposal(from, pid, key, value) => {
+                        self.node
+                            .tx
+                            .send(UrMsg::ForwardProposal(from, pid, key, value))
+                            .unwrap();
+                    }
+                    _ => (),
+                }
+                //ctx.text(text)
+            }
+            ws::Message::Binary(bin) => {
+                let msg = decode_ws(&bin);
+                self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
+            }
+            ws::Message::Close(_) => {
+                ctx.stop();
+            }
+            ws::Message::Nop => (),
+        }
+    }
+
+    fn handle_kv(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {}
 
     /// helper method that sends ping to client every second.
     ///

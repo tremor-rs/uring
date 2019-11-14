@@ -71,7 +71,7 @@ pub enum CtrlMsg {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum Protocol {
-    Ring,
+    URing,
     KV,
 }
 

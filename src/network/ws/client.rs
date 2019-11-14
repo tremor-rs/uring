@@ -39,12 +39,25 @@ macro_rules! eat_error {
     };
 }
 
+macro_rules! eat_error_and_blow {
+    ($l:expr, $e:expr) => {
+        match $e {
+            Err(e) => {
+                error!($l, "[WS Error] {}", e);
+                panic!(format!("{}: {:?}", e, e));
+            }
+            Ok(v) => v,
+        }
+    };
+}
+
 pub(crate) struct Connection {
     //    my_id: u64,
     remote_id: NodeId,
     tx: Sender<UrMsg>,
     logger: Logger,
     sink: SinkWrite<SplitSink<Framed<BoxedSocket, AxCodec>>>,
+    handshake_done: bool,
 }
 
 impl Connection {
@@ -68,7 +81,7 @@ impl Actor for Connection {
     }
 
     fn stopped(&mut self, _: &mut Context<Self>) {
-        self.tx.send(UrMsg::DownLocal(self.remote_id)).unwrap();
+        eat_error_and_blow!(self.logger, self.tx.send(UrMsg::DownLocal(self.remote_id)));
         info!(self.logger, "system stopped");
         System::current().stop();
     }
@@ -77,38 +90,88 @@ impl Actor for Connection {
 /// Handle server websocket messages
 impl StreamHandler<Frame, WsProtocolError> for Connection {
     fn handle(&mut self, msg: Frame, ctx: &mut Context<Self>) {
-        match msg {
-            Frame::Close(_) => {
-                eat_error!(self.logger, self.sink.write(Message::Close(None)));
-            }
-            Frame::Ping(data) => {
-                eat_error!(self.logger, self.sink.write(Message::Pong(data)));
-            }
-            Frame::Text(Some(data)) => {
-                let msg: CtrlMsg = serde_json::from_slice(&data).unwrap();
-                match msg {
-                    CtrlMsg::HelloAck(id, peer, peers) => {
-                        self.remote_id = id;
-                        self.tx
-                            .send(UrMsg::RegisterLocal(id, peer, ctx.address(), peers))
-                            .unwrap();
-                    }
-                    CtrlMsg::AckProposal(pid, success) => {
-                        self.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
-                    }
-                    _ => (),
+        if self.handshake_done {
+            match msg {
+                Frame::Close(_) => {
+                    eat_error!(self.logger, self.sink.write(Message::Close(None)));
                 }
+                Frame::Ping(data) => {
+                    eat_error!(self.logger, self.sink.write(Message::Pong(data)));
+                }
+                Frame::Text(Some(data)) => {
+                    let msg: CtrlMsg =
+                        eat_error_and_blow!(self.logger, serde_json::from_slice(&data));
+                    match msg {
+                        CtrlMsg::HelloAck(id, peer, peers) => {
+                            self.remote_id = id;
+                            eat_error_and_blow!(
+                                self.logger,
+                                self.tx
+                                    .send(UrMsg::RegisterLocal(id, peer, ctx.address(), peers))
+                            );
+                        }
+                        CtrlMsg::AckProposal(pid, success) => {
+                            eat_error_and_blow!(
+                                self.logger,
+                                self.tx.send(UrMsg::AckProposal(pid, success))
+                            );
+                        }
+                        _ => (),
+                    }
+                }
+                Frame::Text(None) => {
+                    eat_error!(self.logger, self.sink.write(Message::Text(String::new())));
+                }
+                Frame::Binary(Some(bin)) => {
+                    let msg = decode_ws(&bin);
+                    println!("received raft message {:?}", msg);
+                    self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
+                }
+                Frame::Binary(None) => (),
+                Frame::Pong(_) => (),
             }
-            Frame::Text(None) => {
-                eat_error!(self.logger, self.sink.write(Message::Text(String::new())));
+        } else {
+            match msg {
+                Frame::Close(_) => {
+                    eat_error!(self.logger, self.sink.write(Message::Close(None)));
+                }
+                Frame::Ping(data) => {
+                    eat_error!(self.logger, self.sink.write(Message::Pong(data)));
+                }
+                Frame::Text(Some(data)) => {
+                    let msg: ProtocolSelect =
+                        eat_error_and_blow!(self.logger, serde_json::from_slice(&data));
+                    match msg {
+                        ProtocolSelect::Selected(1, Protocol::URing) => {
+                            self.handshake_done = true;
+                            self.tx.send(UrMsg::InitLocal(ctx.address())).unwrap();
+                        }
+                        ProtocolSelect::Selected(rid, proto) => {
+                            error!(
+                                self.logger,
+                                "Wrong protocol select response: {} / {:?}", rid, proto
+                            );
+                            ctx.stop();
+                        }
+                        ProtocolSelect::Select(rid, protocol) => {
+                            error!(
+                                self.logger,
+                                "Select response not selected response for: {} / {:?}",
+                                rid,
+                                protocol
+                            );
+                            ctx.stop();
+                        }
+                    }
+                }
+                Frame::Text(None) => {
+                    ctx.stop();
+                }
+                Frame::Binary(_) => {
+                    ctx.stop();
+                }
+                Frame::Pong(_) => (),
             }
-            Frame::Binary(Some(bin)) => {
-                let msg = decode_ws(&bin);
-                println!("received raft message {:?}", msg);
-                self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
-            }
-            Frame::Binary(None) => (),
-            Frame::Pong(_) => (),
         }
     }
 
@@ -162,14 +225,20 @@ pub(crate) fn remote_endpoint(
                     let master2 = master1.clone();
                     let addr = Connection::create(move |ctx| {
                         Connection::add_stream(stream, ctx);
+                        let mut sink = SinkWrite::new(sink, ctx);
+                        sink.write(Message::Text(
+                            serde_json::to_string(&ProtocolSelect::Select(1, Protocol::URing))
+                                .unwrap(),
+                        ))
+                        .unwrap();
                         Connection {
                             logger,
                             remote_id: NodeId(0),
                             tx: master2,
-                            sink: SinkWrite::new(sink, ctx),
+                            sink,
+                            handshake_done: false,
                         }
                     });
-                    master1.send(UrMsg::InitLocal(addr)).unwrap();
                     ()
                 })
         }));
