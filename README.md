@@ -86,5 +86,22 @@ websocat ws://localhost:8081/uring
 {"As": {"protocol": "KV", "cmd": {"Get": {"rid": 2, "key": "snot"}}}}
 
 {"As": {"protocol": "KV", "cmd": {"Put": {"rid": 3, "key": "snot", "store": "badger"}}}}
+```
 
+## ws - mring
+
+```bash
+websocat ws://localhost:8081/uring
+
+{"Select": {"rid": 1, "protocol": "MRing"}}
+
+{"GetSize": {"rid": 2}}
+
+{"SetSize": {"rid": 3, "size": 32}}
+
+{"GetSize": {"rid": 2}}
+
+{"AddNode": {"rid": 3, "node": "n1"}}
+{"AddNode": {"rid": 3, "node": "n2"}}
+{"AddNode": {"rid": 3, "node": "n3"}}
 ```

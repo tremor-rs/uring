@@ -22,6 +22,7 @@ use actix_web_actors::ws;
 pub enum Protocol {
     URing,
     KV,
+    MRing,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -68,7 +69,7 @@ pub(crate) enum MRRequest {
     SetSize { rid: RequestId, size: u64 },
     GetSize { rid: RequestId },
     GetNodes { rid: RequestId },
-    AddSize { rid: RequestId, node: String },
+    AddNode { rid: RequestId, node: String },
     RemoveNode { rid: RequestId, node: String },
 }
 
@@ -111,8 +112,9 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for Connection {
     fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
         match self.protocol {
             None => self.handle_initial(msg, ctx),
-            Some(Protocol::URing) => self.handle_uring(msg, ctx),
             Some(Protocol::KV) => self.handle_kv(msg, ctx),
+            Some(Protocol::URing) => self.handle_uring(msg, ctx),
+            Some(Protocol::MRing) => self.handle_mring(msg, ctx),
         }
     }
 }
@@ -122,8 +124,9 @@ impl Handler<WsReply> for Connection {
     fn handle(&mut self, msg: WsReply, ctx: &mut Self::Context) {
         match self.protocol {
             None => ctx.text(serde_json::to_string(&msg).unwrap()),
-            Some(Protocol::URing) => ctx.stop(),
             Some(Protocol::KV) => ctx.text(serde_json::to_string(&msg).unwrap()),
+            Some(Protocol::MRing) => ctx.text(serde_json::to_string(&msg).unwrap()),
+            Some(Protocol::URing) => ctx.stop(),
         }
     }
 }
@@ -180,7 +183,9 @@ impl Connection {
                         ctx.stop();
                     }
                     ProtocolSelect::As { protocol, cmd } => match protocol {
-                        Protocol::KV => self.handle_kv2(serde_json::from_value(cmd).unwrap(), ctx),
+                        Protocol::KV => {
+                            self.handle_kv_msg(serde_json::from_value(cmd).unwrap(), ctx)
+                        }
                         _ => ctx.stop(),
                     },
                 }
@@ -249,7 +254,9 @@ impl Connection {
             ws::Message::Pong(_) => {
                 self.hb = Instant::now();
             }
-            ws::Message::Text(text) => self.handle_kv2(serde_json::from_str(&text).unwrap(), ctx),
+            ws::Message::Text(text) => {
+                self.handle_kv_msg(serde_json::from_str(&text).unwrap(), ctx)
+            }
             ws::Message::Binary(_) => {
                 ctx.stop();
             }
@@ -260,7 +267,7 @@ impl Connection {
         }
     }
 
-    fn handle_kv2(&mut self, msg: KVRequest, ctx: &mut ws::WebsocketContext<Self>) {
+    fn handle_kv_msg(&mut self, msg: KVRequest, ctx: &mut ws::WebsocketContext<Self>) {
         match msg {
             KVRequest::Get { rid, key } => {
                 self.node
@@ -301,6 +308,64 @@ impl Connection {
                         store.into_bytes(),
                         Reply::WS(rid, ctx.address()),
                     ))
+                    .unwrap();
+            }
+        }
+    }
+
+    fn handle_mring(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
+        match msg {
+            ws::Message::Ping(msg) => {
+                self.hb = Instant::now();
+                ctx.pong(&msg);
+            }
+            ws::Message::Pong(_) => {
+                self.hb = Instant::now();
+            }
+            ws::Message::Text(text) => {
+                self.handle_mring_msg(serde_json::from_str(&text).unwrap(), ctx)
+            }
+            ws::Message::Binary(_) => {
+                ctx.stop();
+            }
+            ws::Message::Close(_) => {
+                ctx.stop();
+            }
+            ws::Message::Nop => (),
+        }
+    }
+
+    fn handle_mring_msg(&mut self, msg: MRRequest, ctx: &mut ws::WebsocketContext<Self>) {
+        match msg {
+            MRRequest::GetSize { rid } => {
+                self.node
+                    .tx
+                    .send(UrMsg::MRingGetSize(Reply::WS(rid, ctx.address())))
+                    .unwrap();
+            }
+
+            MRRequest::SetSize { rid, size } => {
+                self.node
+                    .tx
+                    .send(UrMsg::MRingSetSize(size, Reply::WS(rid, ctx.address())))
+                    .unwrap();
+            }
+            MRRequest::GetNodes { rid } => {
+                self.node
+                    .tx
+                    .send(UrMsg::MRingGetNodes(Reply::WS(rid, ctx.address())))
+                    .unwrap();
+            }
+            MRRequest::AddNode { rid, node } => {
+                self.node
+                    .tx
+                    .send(UrMsg::MRingAddNode(node, Reply::WS(rid, ctx.address())))
+                    .unwrap();
+            }
+            MRRequest::RemoveNode { rid, node } => {
+                self.node
+                    .tx
+                    .send(UrMsg::MRingRemoveNode(node, Reply::WS(rid, ctx.address())))
                     .unwrap();
             }
         }
