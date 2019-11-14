@@ -64,6 +64,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all
   code-coverage:
+    name: Check Code Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
@@ -73,10 +74,33 @@ jobs:
         with:
           toolchain: nightly
           override: true
+      - uses: wayfair-incubator/cache@v900
+        id: cache-build
+        with:
+          path: ~/.cache/sccache
+          key: sccache-cache-tarpaulin-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sccache-cache-${{ runner.os }}-
+      - uses: wayfair-incubator/cache@v900
+        id: cache-sccache
+        with:
+          path: ~/sccache
+          key: sccache-${{ runner.os }}
+      - name: restore sccache
+        if: steps.cache-sccache.outputs.cache-hit == 'true'
+        run: cp ~/sccache/* ~/.cargo/bin
+      - name: install sccache
+        if: steps.cache-sccache.outputs.cache-hit != 'true'
+        run: cargo install sccache
+      - name: Prepare sccache command bin for cache
+        if: steps.cache-sccache.outputs.cache-hit != 'true'
+        run: mkdir ~/sccache; cp ~/.cargo/bin/sccache ~/sccache
       - name: install tarpaulin
-        run: cargo install cargo-tarpaulin -f
+        run: bash <(curl https://raw.githubusercontent.com/xd009642/tarpaulin/master/travis-install.sh)
       - name: run tarpaulin
-        run: cargo tarpaulin -v --out Xml --exclude-files target* --exclude-files depricated/* --all -- --test-threads=1
+        env:
+          RUSTC_WRAPPER: sccache
+        run: cargo tarpaulin -v --out Xml --exclude-files target* --exclude-files depricated/* --all
       - uses: codecov/codecov-action@v1.0.2
         with:
           token: ${{secrets.CODECOV_TOKEN}} #required
