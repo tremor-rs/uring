@@ -12,43 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod client;
+mod rest;
+mod server;
 use super::{Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg, ServiceId};
 use crate::raft_node::RaftNodeStatus;
 use crate::service::kv::{Event as KVEvent, KV_SERVICE};
 use crate::service::vnode::{Event as VNodeEvent, VNODE_SERVICE};
-use crate::{NodeId, KV};
-use actix::io::SinkWrite;
+use crate::NodeId;
 use actix::prelude::*;
-use actix_codec::Framed;
-use actix_web::{
-    http::StatusCode, middleware, web, App, Error as ActixError, HttpRequest, HttpResponse,
-    HttpServer,
-};
-use actix_web_actors::ws;
-use awc::{
-    error::WsProtocolError,
-    ws::{CloseCode, CloseReason, Codec as AxCodec, Frame, Message},
-    BoxedSocket, Client,
-};
-use byteorder::{BigEndian, ReadBytesExt};
+use actix_web::{middleware, web, App, HttpServer};
 use bytes::Bytes;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
-use futures::{
-    lazy,
-    stream::{SplitSink, Stream},
-    Future,
-};
+use futures::Future;
 use raft::eraftpb::Message as RaftMessage;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
 use std::io;
-use std::io::Cursor;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-type LocalMailboxes = HashMap<NodeId, Addr<WsOfframpWorker>>;
-type RemoteMailboxes = HashMap<NodeId, Addr<UrSocket>>;
+type LocalMailboxes = HashMap<NodeId, Addr<client::Connection>>;
+type RemoteMailboxes = HashMap<NodeId, Addr<server::Connection>>;
 
 /// How often heartbeat pings are sent
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -56,19 +42,12 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
-struct Node {
+pub(crate) struct Node {
     id: NodeId,
     tx: Sender<UrMsg>,
     logger: Logger,
 }
 
-macro_rules! eat_error {
-    ($l:expr, $e:expr) => {
-        if let Err(e) = $e {
-            error!($l, "[WS Error] {}", e)
-        }
-    };
-}
 pub struct Network {
     id: NodeId,
     local_mailboxes: LocalMailboxes,
@@ -90,11 +69,28 @@ pub enum CtrlMsg {
     ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
 }
 
-pub enum UrMsg {
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum Protocol {
+    Ring,
+    KV,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum ProtocolSelect {
+    Select(u64, Protocol),
+    Selected(u64, Protocol),
+}
+
+pub(crate) enum UrMsg {
     // Network related
-    InitLocal(Addr<WsOfframpWorker>),
-    RegisterLocal(NodeId, String, Addr<WsOfframpWorker>, Vec<(NodeId, String)>),
-    RegisterRemote(NodeId, String, Addr<UrSocket>),
+    InitLocal(Addr<client::Connection>),
+    RegisterLocal(
+        NodeId,
+        String,
+        Addr<client::Connection>,
+        Vec<(NodeId, String)>,
+    ),
+    RegisterRemote(NodeId, String, Addr<server::Connection>),
     DownLocal(NodeId),
     DownRemote(NodeId),
     Status(Sender<RaftNodeStatus>),
@@ -132,7 +128,7 @@ impl Network {
         for peer in peers {
             let logger = logger.clone();
             let tx = tx.clone();
-            thread::spawn(move || remote_endpoint(peer, tx, logger));
+            thread::spawn(move || client::remote_endpoint(peer, tx, logger));
         }
 
         let node = Node {
@@ -150,34 +146,34 @@ impl Network {
                     .data(node.clone())
                     // enable logger
                     .wrap(middleware::Logger::default())
-                    .service(web::resource("/status").route(web::get().to(status)))
+                    .service(web::resource("/status").route(web::get().to(rest::status)))
                     .service(
                         web::resource("/data/{id}")
-                            .route(web::get().to(get))
-                            .route(web::post().to(post))
-                            .route(web::delete().to(delete)),
+                            .route(web::get().to(rest::get))
+                            .route(web::post().to(rest::post))
+                            .route(web::delete().to(rest::delete)),
                     )
                     .service(
                         web::resource("/data/{id}/cas") // FIXME use query param instead
-                            .route(web::post().to(cas)),
+                            .route(web::post().to(rest::cas)),
                     )
                     .service(
                         web::resource("/node/{id}")
-                            .route(web::get().to(get_node))
-                            .route(web::post().to(post_node)),
+                            .route(web::get().to(rest::get_node))
+                            .route(web::post().to(rest::post_node)),
                     )
                     .service(
                         web::resource("/mring")
-                            .route(web::get().to(get_mring_size))
-                            .route(web::post().to(set_mring_size)),
+                            .route(web::get().to(rest::get_mring_size))
+                            .route(web::post().to(rest::set_mring_size)),
                     )
                     .service(
                         web::resource("/mring/node")
-                            .route(web::get().to(get_mring_nodes))
-                            .route(web::post().to(add_mring_node)),
+                            .route(web::get().to(rest::get_mring_nodes))
+                            .route(web::post().to(rest::add_mring_node)),
                     )
                     // websocket route
-                    .service(web::resource("/uring").route(web::get().to(uring_index)))
+                    .service(web::resource("/uring").route(web::get().to(rest::uring_index)))
             })
             // start http server on 127.0.0.1:8080
             .bind(t_endpoint)?
@@ -318,7 +314,7 @@ impl NetworkTrait for Network {
                             self.known_peers.insert(peer_id, peer.clone());
                             let tx = self.tx.clone();
                             let logger = self.logger.clone();
-                            thread::spawn(move || remote_endpoint(peer, tx, logger));
+                            thread::spawn(move || client::remote_endpoint(peer, tx, logger));
                         }
                     }
                 }
@@ -333,7 +329,7 @@ impl NetworkTrait for Network {
                         self.known_peers.insert(id, peer.clone());
                         let tx = self.tx.clone();
                         let logger = self.logger.clone();
-                        thread::spawn(move || remote_endpoint(peer, tx, logger));
+                        thread::spawn(move || client::remote_endpoint(peer, tx, logger));
                     }
                     endpoint
                         .clone()
@@ -441,445 +437,11 @@ impl NetworkTrait for Network {
     }
 }
 
-/// do websocket handshake and start `UrSocket` actor
-fn uring_index(
-    r: HttpRequest,
-    stream: web::Payload,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let res = ws::start(UrSocket::new(srv.get_ref().clone()), &r, stream);
-    res
-}
-
-#[derive(Deserialize)]
-pub struct NoParams {}
-
-fn status(
-    _r: HttpRequest,
-    _params: web::Path<NoParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::Status(tx)).unwrap();
-    if let Some(value) = rx.recv().ok() {
-        Ok(HttpResponse::Ok().json(value))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
-}
-
-#[derive(Deserialize)]
-pub struct GetParams {
-    id: String,
-}
-
-/// do websocket handshake and start `UrSocket` actor
-fn get(
-    _r: HttpRequest,
-    params: web::Path<GetParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    let key = params.id.clone();
-    srv.get_ref()
-        .tx
-        .send(UrMsg::Get(key.clone().into_bytes(), tx))
-        .unwrap();
-    if let Some(value) = rx
-        .recv()
-        .ok()
-        .and_then(|v| v)
-        .and_then(|v| String::from_utf8(v).ok())
-    {
-        Ok(HttpResponse::Ok().json(KV { key, value }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
-}
-
-#[derive(Deserialize)]
-pub struct PostParams {
-    id: String,
-}
-
-#[derive(Deserialize)]
-pub struct PostBody {
-    value: String,
-}
-
-/// do websocket handshake and start `UrSocket` actor
-fn post(
-    _r: HttpRequest,
-    params: web::Path<PostParams>,
-    body: web::Json<PostBody>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
-        .tx
-        .send(UrMsg::Post(
-            params.id.clone().into_bytes(),
-            body.value.clone().into_bytes(),
-            tx,
-        ))
-        .unwrap();
-    if rx.recv().unwrap().is_some() {
-        Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
-}
-
-#[derive(Deserialize)]
-pub struct CasBody {
-    check: String,
-    store: String,
-}
-
-fn cas(
-    _r: HttpRequest,
-    params: web::Path<PostParams>,
-    body: web::Json<CasBody>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
-        .tx
-        .send(UrMsg::Cas(
-            params.id.clone().into_bytes(),
-            body.check.clone().into_bytes(),
-            body.store.clone().into_bytes(),
-            tx,
-        ))
-        .unwrap();
-    // FIXME improve status when check fails vs succeeds?
-    if rx.recv().unwrap().is_some() {
-        Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
-}
-
-#[derive(Deserialize)]
-pub struct DeleteParams {
-    id: String,
-}
-
-fn delete(
-    _r: HttpRequest,
-    params: web::Path<DeleteParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    let key = params.id.clone();
-    srv.get_ref()
-        .tx
-        .send(UrMsg::Delete(key.clone().into_bytes(), tx))
-        .unwrap();
-    if let Some(value) = rx
-        .recv()
-        .ok()
-        .and_then(|v| v)
-        .and_then(|v| String::from_utf8(v).ok())
-    {
-        Ok(HttpResponse::Ok().json(KV { key, value }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
-}
-
-#[derive(Deserialize)]
-pub struct GetNodeParams {
-    id: NodeId,
-}
-fn get_node(
-    _r: HttpRequest,
-    params: web::Path<GetNodeParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
-        .tx
-        .send(UrMsg::GetNode(params.id, tx))
-        .unwrap();
-    if rx.recv().unwrap() {
-        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
-}
-
-fn post_node(
-    _r: HttpRequest,
-    params: web::Path<GetNodeParams>,
-    _body: web::Payload,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
-        .tx
-        .send(UrMsg::AddNode(params.id, tx))
-        .unwrap();
-    if rx.recv().unwrap() {
-        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct MRingSize {
-    size: u64,
-}
-fn get_mring_size(_r: HttpRequest, srv: web::Data<Node>) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::MRingGetSize(tx)).unwrap();
-    if let Some(size) = rx.recv().unwrap().and_then(|data| {
-        let mut rdr = Cursor::new(data);
-        rdr.read_u64::<BigEndian>().ok()
-    }) {
-        Ok(HttpResponse::Ok().json(MRingSize { size }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
-}
-
-fn set_mring_size(
-    _r: HttpRequest,
-    body: web::Json<MRingSize>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
-        .tx
-        .send(UrMsg::MRingSetSize(body.size, tx))
-        .unwrap();
-    if let Some(size) = rx.recv().unwrap().and_then(|data| {
-        let mut rdr = Cursor::new(data);
-        rdr.read_u64::<BigEndian>().ok()
-    }) {
-        Ok(HttpResponse::Ok().json(MRingSize { size }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
-}
-
-fn get_mring_nodes(_r: HttpRequest, srv: web::Data<Node>) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::MRingGetNodes(tx)).unwrap();
-    if let Some(data) = rx.recv().unwrap() {
-        Ok(HttpResponse::Ok()
-            .content_type("applicaiton/json")
-            .body(data))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct MRingNode {
-    node: String,
-}
-
-fn add_mring_node(
-    _r: HttpRequest,
-    body: web::Json<MRingNode>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
-        .tx
-        .send(UrMsg::MRingAddNode(body.node.clone(), tx))
-        .unwrap();
-    if let Some(data) = rx.recv().unwrap() {
-        Ok(HttpResponse::Ok()
-            .content_type("applicaiton/json")
-            .body(data))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
-}
-
-/// websocket connection is long running connection, it easier
-/// to handle with an actor
-pub struct UrSocket {
-    /// Client must send ping at least once per 10 seconds (CLIENT_TIMEOUT),
-    /// otherwise we drop connection.
-    hb: Instant,
-    node: Node,
-    remote_id: NodeId,
-}
-
-impl Actor for UrSocket {
-    type Context = ws::WebsocketContext<Self>;
-
-    /// Method is called on actor start. We start the heartbeat process here.
-    fn started(&mut self, ctx: &mut Self::Context) {
-        self.hb(ctx);
-    }
-
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        self.node
-            .tx
-            .send(UrMsg::DownRemote(self.remote_id))
-            .unwrap();
-    }
-}
-
-/// Handler for `ws::Message`
-impl StreamHandler<ws::Message, ws::ProtocolError> for UrSocket {
-    fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
-        // process websocket messages
-        match msg {
-            ws::Message::Ping(msg) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
-            }
-            ws::Message::Pong(_) => {
-                self.hb = Instant::now();
-            }
-            ws::Message::Text(text) => {
-                let msg: CtrlMsg = serde_json::from_str(&text).unwrap();
-                match msg {
-                    CtrlMsg::Hello(id, peer) => {
-                        self.remote_id = id;
-                        self.node
-                            .tx
-                            .send(UrMsg::RegisterRemote(id, peer, ctx.address()))
-                            .unwrap();
-                    }
-                    CtrlMsg::AckProposal(pid, success) => {
-                        self.node.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
-                    }
-                    CtrlMsg::ForwardProposal(from, pid, key, value) => {
-                        self.node
-                            .tx
-                            .send(UrMsg::ForwardProposal(from, pid, key, value))
-                            .unwrap();
-                    }
-                    _ => (),
-                }
-
-                //ctx.text(text)
-            }
-            ws::Message::Binary(bin) => {
-                let msg = decode_ws(&bin);
-                self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
-            }
-            ws::Message::Close(_) => {
-                ctx.stop();
-            }
-            ws::Message::Nop => (),
-        }
-    }
-}
-
-/// Handle stdin commands
-impl Handler<WsMessage> for UrSocket {
-    type Result = ();
-
-    fn handle(&mut self, msg: WsMessage, ctx: &mut Self::Context) {
-        match msg {
-            WsMessage::Msg(data) => ctx.text(serde_json::to_string(&data).unwrap()),
-        }
-    }
-}
-
-/// Handle stdin commands
-impl Handler<RaftMsg> for UrSocket {
-    type Result = ();
-    fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
-        ctx.binary(encode_ws(msg));
-    }
-}
-
-impl UrSocket {
-    fn new(node: Node) -> Self {
-        Self {
-            hb: Instant::now(),
-            node,
-            remote_id: NodeId(0),
-        }
-    }
-
-    /// helper method that sends ping to client every second.
-    ///
-    /// also this method checks heartbeats from client
-    fn hb(&self, ctx: &mut <Self as Actor>::Context) {
-        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
-            // check client heartbeats
-            if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
-                // heartbeat timed out
-                error!(
-                    act.node.logger,
-                    "Websocket Client heartbeat failed, disconnecting!"
-                );
-
-                // stop actor
-                ctx.stop();
-
-                // don't try to send a ping
-                return;
-            }
-
-            ctx.ping("");
-        });
-    }
-}
-
-pub struct WsOfframpWorker {
-    //    my_id: u64,
-    remote_id: NodeId,
-    tx: Sender<UrMsg>,
-    logger: Logger,
-    sink: SinkWrite<SplitSink<Framed<BoxedSocket, AxCodec>>>,
-}
-
-impl WsOfframpWorker {
-    fn hb(&self, ctx: &mut Context<Self>) {
-        ctx.run_later(HEARTBEAT_INTERVAL, |act, ctx| {
-            act.sink
-                .write(Message::Ping(String::from("Snot badger!")))
-                .unwrap();
-            act.hb(ctx);
-        });
-    }
-}
-
-impl actix::io::WriteHandler<WsProtocolError> for WsOfframpWorker {}
-
-impl Actor for WsOfframpWorker {
-    type Context = Context<Self>;
-
-    fn started(&mut self, ctx: &mut Context<Self>) {
-        self.hb(ctx)
-    }
-
-    fn stopped(&mut self, _: &mut Context<Self>) {
-        self.tx.send(UrMsg::DownLocal(self.remote_id)).unwrap();
-        info!(self.logger, "system stopped");
-        System::current().stop();
-    }
-}
+/// do websocket handshake and start `client::Connection` actor
 
 #[derive(Message)]
 pub enum WsMessage {
     Msg(CtrlMsg),
-}
-
-/// Handle stdin commands
-impl Handler<WsMessage> for WsOfframpWorker {
-    type Result = ();
-
-    fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self>) {
-        match msg {
-            WsMessage::Msg(data) => eat_error!(
-                self.logger,
-                self.sink
-                    .write(Message::Text(serde_json::to_string(&data).unwrap()))
-            ),
-        }
-    }
 }
 
 #[cfg(feature = "json-proto")]
@@ -907,113 +469,4 @@ fn encode_ws(msg: RaftMsg) -> Bytes {
 fn encode_ws(msg: RaftMsg) -> Bytes {
     use protobuf::Message;
     msg.0.write_to_bytes().unwrap().into()
-}
-
-/// Handle server websocket messages
-impl StreamHandler<Frame, WsProtocolError> for WsOfframpWorker {
-    fn handle(&mut self, msg: Frame, ctx: &mut Context<Self>) {
-        match msg {
-            Frame::Close(_) => {
-                eat_error!(self.logger, self.sink.write(Message::Close(None)));
-            }
-            Frame::Ping(data) => {
-                eat_error!(self.logger, self.sink.write(Message::Pong(data)));
-            }
-            Frame::Text(Some(data)) => {
-                let msg: CtrlMsg = serde_json::from_slice(&data).unwrap();
-                match msg {
-                    CtrlMsg::HelloAck(id, peer, peers) => {
-                        self.remote_id = id;
-                        self.tx
-                            .send(UrMsg::RegisterLocal(id, peer, ctx.address(), peers))
-                            .unwrap();
-                    }
-                    CtrlMsg::AckProposal(pid, success) => {
-                        self.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
-                    }
-                    _ => (),
-                }
-            }
-            Frame::Text(None) => {
-                eat_error!(self.logger, self.sink.write(Message::Text(String::new())));
-            }
-            Frame::Binary(Some(bin)) => {
-                let msg = decode_ws(&bin);
-                println!("received raft message {:?}", msg);
-                self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
-            }
-            Frame::Binary(None) => (),
-            Frame::Pong(_) => (),
-        }
-    }
-
-    fn error(&mut self, error: WsProtocolError, _ctx: &mut Context<Self>) -> Running {
-        match error {
-            _ => eat_error!(
-                self.logger,
-                self.sink.write(Message::Close(Some(CloseReason {
-                    code: CloseCode::Protocol,
-                    description: None,
-                })))
-            ),
-        };
-        // Reconnect
-        Running::Continue
-    }
-
-    fn started(&mut self, _ctx: &mut Context<Self>) {
-        info!(self.logger, "[WS Onramp] Connection established.");
-    }
-
-    fn finished(&mut self, ctx: &mut Context<Self>) {
-        info!(self.logger, "[WS Onramp] Connection terminated.");
-        eat_error!(self.logger, self.sink.write(Message::Close(None)));
-        ctx.stop()
-    }
-}
-
-fn remote_endpoint(endpoint: String, master: Sender<UrMsg>, logger: Logger) -> std::io::Result<()> {
-    loop {
-        let sys = actix::System::new("ws-example");
-        let endpoint1 = endpoint.clone();
-        let master1 = master.clone();
-        // This clones the logger passed in from the function and makes it local for each loop
-        let logger = logger.clone();
-        Arbiter::spawn(lazy(move || {
-            let err_logger = logger.clone();
-            Client::new()
-                .ws(&format!("ws://{}/uring", endpoint1))
-                .connect()
-                .map_err(move |e| {
-                    error!(err_logger, "Error: {}", e);
-                    ()
-                })
-                .map(move |(_response, framed)| {
-                    let (sink, stream) = framed.split();
-                    let master2 = master1.clone();
-                    let addr = WsOfframpWorker::create(move |ctx| {
-                        WsOfframpWorker::add_stream(stream, ctx);
-                        WsOfframpWorker {
-                            logger,
-                            remote_id: NodeId(0),
-                            tx: master2,
-                            sink: SinkWrite::new(sink, ctx),
-                        }
-                    });
-                    master1.send(UrMsg::InitLocal(addr)).unwrap();
-                    ()
-                })
-        }));
-        sys.run().unwrap();
-        //        dbg!(r);
-    }
-}
-
-/// Handle stdin commands
-impl Handler<RaftMsg> for WsOfframpWorker {
-    type Result = ();
-
-    fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
-        self.sink.write(Message::Binary(encode_ws(msg))).unwrap();
-    }
 }
