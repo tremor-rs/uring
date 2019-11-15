@@ -235,7 +235,7 @@ pub(crate) fn remote_endpoint(
                 .map(move |(_response, framed)| {
                     let (sink, stream) = framed.split();
                     let master2 = master1.clone();
-                    let addr = Connection::create(move |ctx| {
+                    Connection::create(move |ctx| {
                         Connection::add_stream(stream, ctx);
                         let mut sink = SinkWrite::new(sink, ctx);
                         sink.write(Message::Text(
@@ -254,7 +254,6 @@ pub(crate) fn remote_endpoint(
                             handshake_done: false,
                         }
                     });
-                    ()
                 })
         }));
         sys.run().unwrap();

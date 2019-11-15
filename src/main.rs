@@ -16,6 +16,7 @@ mod codec;
 #[allow(unused)]
 pub mod errors;
 pub mod network;
+mod pubsub;
 pub mod raft_node;
 pub mod service;
 pub mod storage;
@@ -244,6 +245,9 @@ fn main() -> std::io::Result<()> {
     let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
     let id = NodeId(matches.value_of("id").unwrap_or("1").parse().unwrap());
     let loop_logger = logger.clone();
+
+    let (ps_handle, ps_tx) = pubsub::start(&logger);
+
     let (handle, network) = ws::Network::new(&logger, id, endpoint, peers);
 
     thread::spawn(move || raft_loop(id, bootstrap, network, loop_logger));
