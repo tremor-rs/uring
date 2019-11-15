@@ -33,7 +33,13 @@ pub trait WriteStorage {
     fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()>;
     fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
     fn put(&self, keyscope: u16, key: &[u8], value: &[u8]);
-    fn cas(&self, keyscope: u16, key: &[u8], check_value: &[u8], store_value: &[u8]) -> bool;
+    fn cas(
+        &self,
+        keyscope: u16,
+        key: &[u8],
+        check_value: &[u8],
+        store_value: &[u8],
+    ) -> Option<Vec<u8>>;
     fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
 }
 
@@ -150,19 +156,30 @@ impl WriteStorage for URRocksStorage {
         let key = make_data_key(scope, key);
         self.backend.put(key, value).unwrap();
     }
-    fn cas(&self, scope: u16, key: &[u8], check_value: &[u8], store_value: &[u8]) -> bool {
+    fn cas(
+        &self,
+        scope: u16,
+        key: &[u8],
+        check_value: &[u8],
+        store_value: &[u8],
+    ) -> Option<Vec<u8>> {
         match self.get(scope, key) {
             None => {
                 //self.put(scope, key, store_value);
                 //true
-                false
+                if check_value.is_empty() {
+                    None
+                } else {
+                    Some(vec![])
+                }
             }
             Some(value) => {
                 if value == check_value {
                     self.put(scope, key, store_value);
-                    return true;
+                    None
+                } else {
+                    Some(value)
                 }
-                false
             }
         }
     }

@@ -15,11 +15,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Default, Serialize, Deserialize, Debug)]
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct Relocation {
     destinations: HashMap<String, Vec<u64>>,
 }
 pub type Relocations = HashMap<String, Relocation>;
+pub type Nodes = Vec<Node>;
 pub trait Placement {
     fn add_node(count: u64, current: Vec<Node>, new: String) -> (Vec<Node>, Relocations);
     fn remove_node(count: u64, current: Vec<Node>, old: String) -> (Vec<Node>, Relocations);
@@ -35,13 +36,13 @@ pub struct Node {
 pub struct Continuous {}
 
 impl Placement for Continuous {
-    fn new(count: u64, new: String) -> Vec<Node> {
+    fn new(count: u64, new: String) -> Nodes {
         vec![Node {
             id: new,
             vnodes: (0..count).collect(),
         }]
     }
-    fn add_node(count: u64, mut current: Vec<Node>, new: String) -> (Vec<Node>, Relocations) {
+    fn add_node(count: u64, mut current: Vec<Node>, new: String) -> (Nodes, Relocations) {
         let mut rs = Relocations::new();
         let new_node = Node {
             id: new,

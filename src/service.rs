@@ -13,8 +13,8 @@
 // limitations under the License.
 
 pub mod kv;
-pub mod vnode;
-use crate::storage;
+pub mod mring;
+use crate::{pubsub, storage};
 use std::{fmt, io};
 
 #[derive(Debug)]
@@ -35,6 +35,11 @@ pub trait Service<Storage>
 where
     Storage: storage::Storage,
 {
-    fn execute(&mut self, storage: &Storage, event: Vec<u8>) -> Result<Option<Vec<u8>>, Error>;
+    fn execute(
+        &mut self,
+        storage: &Storage,
+        pubsub: &pubsub::Channel,
+        event: Vec<u8>,
+    ) -> Result<Option<Vec<u8>>, Error>;
     fn is_local(&self, event: &[u8]) -> Result<bool, Error>;
 }

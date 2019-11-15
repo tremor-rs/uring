@@ -71,6 +71,7 @@ where
     timer: Instant,
     tick_duration: Duration,
     services: HashMap<ServiceId, Box<dyn Service<Storage>>>,
+    pubsub: pubsub::Channel,
 }
 
 impl<Storage, Network> fmt::Debug for RaftNode<Storage, Network>
@@ -135,7 +136,7 @@ where
                     if let Some(service) = self.services.get_mut(&sid) {
                         if service.is_local(&data).unwrap() {
                             let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
-                            let value = service.execute(store, data).unwrap();
+                            let value = service.execute(store, &self.pubsub, data).unwrap();
                             self.network.event_reply(eid, value).unwrap();
                         } else {
                             let pid = self.next_pid();
@@ -354,7 +355,12 @@ where
     }
 
     // Create a raft leader only with itself in its configuration.
-    pub fn create_raft_leader(logger: &Logger, id: NodeId, network: Network) -> Self {
+    pub fn create_raft_leader(
+        logger: &Logger,
+        id: NodeId,
+        pubsub: pubsub::Channel,
+        network: Network,
+    ) -> Self {
         let mut cfg = example_config();
         cfg.id = id.0;
 
@@ -372,6 +378,7 @@ where
             timer: Instant::now(),
             tick_duration: Duration::from_millis(100),
             services: HashMap::new(),
+            pubsub,
         }
     }
 
@@ -380,7 +387,12 @@ where
     }
 
     // Create a raft follower.
-    pub fn create_raft_follower(logger: &Logger, id: NodeId, network: Network) -> Self {
+    pub fn create_raft_follower(
+        logger: &Logger,
+        id: NodeId,
+        pubsub: pubsub::Channel,
+        network: Network,
+    ) -> Self {
         let storage = Storage::new(id);
         Self {
             logger: logger.clone(),
@@ -400,6 +412,7 @@ where
             timer: Instant::now(),
             tick_duration: Duration::from_millis(100),
             services: HashMap::new(),
+            pubsub,
         }
     }
 
@@ -526,7 +539,7 @@ where
                     if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
                         if let Some(service) = self.services.get_mut(&event.sid) {
                             let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
-                            let value = service.execute(&store, event.data).unwrap();
+                            let value = service.execute(store, &self.pubsub, event.data).unwrap();
                             if event.eid.0 != 0 {
                                 self.network.event_reply(event.eid, value).unwrap();
                             }

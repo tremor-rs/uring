@@ -24,7 +24,7 @@ pub mod storage;
 use crate::network::{ws, Network, RaftNetworkMsg};
 use crate::raft_node::*;
 use crate::service::kv::{Service as KVService, KV_SERVICE};
-use crate::service::vnode::{Service as VNodeService, VNODE_SERVICE};
+use crate::service::mring::{Service as MRingService, MRING_SERVICE};
 use crate::storage::URRocksStorage;
 use clap::{App as ClApp, Arg};
 use serde::{Deserialize, Serialize};
@@ -155,20 +155,26 @@ pub struct KVs {
     value: Vec<u8>,
 }
 
-fn raft_loop<N: Network>(id: NodeId, bootstrap: bool, network: N, logger: Logger) {
+fn raft_loop<N: Network>(
+    id: NodeId,
+    bootstrap: bool,
+    pubsub: pubsub::Channel,
+    network: N,
+    logger: Logger,
+) {
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut t1 = Instant::now();
     let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
-        RaftNode::create_raft_leader(&logger, id, network)
+        RaftNode::create_raft_leader(&logger, id, pubsub, network)
     } else {
-        RaftNode::create_raft_follower(&logger, id, network)
+        RaftNode::create_raft_follower(&logger, id, pubsub, network)
     };
     node.set_raft_tick_duration(Duration::from_millis(100));
     node.log();
     let kv = KVService::new(0);
     node.add_service(KV_SERVICE, Box::new(kv));
-    let vnode: VNodeService<service::vnode::placement::Continuous> = VNodeService::new();
-    node.add_service(VNODE_SERVICE, Box::new(vnode));
+    let vnode: MRingService<service::mring::placement::Continuous> = MRingService::new();
+    node.add_service(MRING_SERVICE, Box::new(vnode));
 
     let mut last_state = node.role().clone();
     loop {
@@ -246,11 +252,11 @@ fn main() -> std::io::Result<()> {
     let id = NodeId(matches.value_of("id").unwrap_or("1").parse().unwrap());
     let loop_logger = logger.clone();
 
-    let (ps_handle, ps_tx) = pubsub::start(&logger);
+    let (_ps_handle, ps_tx) = pubsub::start(&logger);
 
-    let (handle, network) = ws::Network::new(&logger, id, endpoint, peers);
+    let (handle, network) = ws::Network::new(&logger, id, endpoint, peers, ps_tx.clone());
 
-    thread::spawn(move || raft_loop(id, bootstrap, network, loop_logger));
+    thread::spawn(move || raft_loop(id, bootstrap, ps_tx, network, loop_logger));
 
     handle.join().unwrap()
 }

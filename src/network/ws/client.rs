@@ -174,6 +174,10 @@ impl StreamHandler<Frame, WsProtocolError> for Connection {
                             );
                             ctx.stop();
                         }
+                        ProtocolSelect::Subscribe { .. } => {
+                            error!(self.logger, "subscribe response not selected response for");
+                            ctx.stop();
+                        }
                     }
                 }
                 Frame::Text(None) => {

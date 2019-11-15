@@ -14,9 +14,10 @@
 // use crate::{NodeId, KV};
 
 use super::*;
-use crate::{NodeId, RequestId};
+use crate::{pubsub, NodeId, RequestId};
 use actix::prelude::*;
 use actix_web_actors::ws;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum Protocol {
@@ -38,6 +39,9 @@ pub enum ProtocolSelect {
     As {
         protocol: Protocol,
         cmd: serde_json::Value,
+    },
+    Subscribe {
+        channel: String,
     },
 }
 
@@ -119,6 +123,12 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for Connection {
     }
 }
 
+impl StreamHandler<pubsub::SubscriberMsg, pubsub::Error> for Connection {
+    fn handle(&mut self, msg: pubsub::SubscriberMsg, ctx: &mut Self::Context) {
+        ctx.text(serde_json::to_string(&msg).unwrap());
+    }
+}
+
 impl Handler<WsReply> for Connection {
     type Result = ();
     fn handle(&mut self, msg: WsReply, ctx: &mut Self::Context) {
@@ -188,6 +198,16 @@ impl Connection {
                         }
                         _ => ctx.stop(),
                     },
+                    ProtocolSelect::Subscribe { channel } => {
+                        let (tx, rx) = bounded(10);
+                        self.node
+                            .pubsub
+                            .send(pubsub::Msg::Subscrube { channel, tx })
+                            .unwrap();
+
+                        let stream = pubsub::Stream::new(rx);
+                        Self::add_stream(stream, ctx);
+                    }
                 }
 
                 //ctx.text(text)

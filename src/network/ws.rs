@@ -15,10 +15,13 @@
 mod client;
 mod rest;
 mod server;
-use super::{Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg, ServiceId};
+use crate::network::{
+    Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg, ServiceId,
+};
+use crate::pubsub;
 use crate::raft_node::RaftNodeStatus;
 use crate::service::kv::{Event as KVEvent, KV_SERVICE};
-use crate::service::vnode::{Event as VNodeEvent, VNODE_SERVICE};
+use crate::service::mring::{Event as MRingEvent, MRING_SERVICE};
 use crate::{NodeId, RequestId};
 use actix::prelude::*;
 use actix_web::{middleware, web, App, HttpServer};
@@ -47,6 +50,7 @@ pub(crate) struct Node {
     id: NodeId,
     tx: Sender<UrMsg>,
     logger: Logger,
+    pubsub: pubsub::Channel,
 }
 
 pub struct Network {
@@ -135,40 +139,40 @@ impl NetworkTrait for Network {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    VNODE_SERVICE,
-                    VNodeEvent::set_size(size),
+                    MRING_SERVICE,
+                    MRingEvent::set_size(size),
                 ))
             }
             Ok(UrMsg::MRingGetSize(reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    VNODE_SERVICE,
-                    VNodeEvent::get_size(),
+                    MRING_SERVICE,
+                    MRingEvent::get_size(),
                 ))
             }
             Ok(UrMsg::MRingGetNodes(reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    VNODE_SERVICE,
-                    VNodeEvent::get_nodes(),
+                    MRING_SERVICE,
+                    MRingEvent::get_nodes(),
                 ))
             }
             Ok(UrMsg::MRingAddNode(node, reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    VNODE_SERVICE,
-                    VNodeEvent::add_node(node),
+                    MRING_SERVICE,
+                    MRingEvent::add_node(node),
                 ))
             }
             Ok(UrMsg::MRingRemoveNode(node, reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    VNODE_SERVICE,
-                    VNodeEvent::remove_node(node),
+                    MRING_SERVICE,
+                    MRingEvent::remove_node(node),
                 ))
             }
             Ok(UrMsg::Status(reply)) => Ok(Status(reply)),
@@ -389,6 +393,7 @@ impl Network {
         id: NodeId,
         endpoint: &str,
         peers: Vec<String>,
+        pubsub: Sender<pubsub::Msg>,
     ) -> (JoinHandle<Result<(), io::Error>>, Self) {
         let (tx, rx) = bounded(100);
 
@@ -402,6 +407,7 @@ impl Network {
             tx: tx.clone(),
             id,
             logger: logger.clone(),
+            pubsub,
         };
 
         let endpoint = endpoint.to_string();

@@ -83,6 +83,7 @@ websocat ws://localhost:8081/uring
 ```
 
 ```bash
+{"Subscribe": {"channel": "kv"}}
 {"As": {"protocol": "KV", "cmd": {"Get": {"rid": 2, "key": "snot"}}}}
 
 {"As": {"protocol": "KV", "cmd": {"Put": {"rid": 3, "key": "snot", "store": "badger"}}}}
