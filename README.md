@@ -106,3 +106,12 @@ websocat ws://localhost:8081/uring
 {"AddNode": {"rid": 3, "node": "n2"}}
 {"AddNode": {"rid": 3, "node": "n3"}}
 ```
+
+## ws - pubsub
+
+```bash
+websocat ws://localhost:8081/uring
+
+{"Subscribe": {"channel": "kv"}}
+{"Subscribe": {"channel": "mring"}}
+```
