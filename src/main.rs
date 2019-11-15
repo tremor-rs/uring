@@ -173,7 +173,7 @@ fn raft_loop<N: Network>(
     node.log();
     let kv = KVService::new(0);
     node.add_service(KV_SERVICE, Box::new(kv));
-    let vnode: MRingService<service::mring::placement::Continuous> = MRingService::new();
+    let vnode: MRingService<service::mring::placement::continuous::Strategy> = MRingService::new();
     node.add_service(MRING_SERVICE, Box::new(vnode));
 
     let mut last_state = node.role().clone();

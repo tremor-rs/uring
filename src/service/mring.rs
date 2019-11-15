@@ -21,21 +21,32 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::marker::PhantomData;
 
+pub type Nodes = Vec<Node>;
+
+#[derive(PartialEq, Default, Serialize, Deserialize, Debug, Clone)]
+pub struct Node {
+    id: String,
+    vnodes: Vec<u64>,
+}
+
 pub const MRING_SERVICE: ServiceId = ServiceId(1);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) enum PSEvent {
     SetSize {
         size: u64,
+        strategy: String,
     },
     NodeAdded {
         node: String,
-        next: placement::Nodes,
+        strategy: String,
+        next: mring::Nodes,
         relocations: placement::Relocations,
     },
     NodeRemoved {
         node: String,
-        next: placement::Nodes,
+        strategy: String,
+        next: mring::Nodes,
         relocations: placement::Relocations,
     },
 }
@@ -104,7 +115,7 @@ where
             })
     }
 
-    fn nodes<Storage>(&self, storage: &Storage) -> Option<placement::Nodes>
+    fn nodes<Storage>(&self, storage: &Storage) -> Option<mring::Nodes>
     where
         Storage: storage::Storage,
     {
@@ -128,17 +139,18 @@ where
         match serde_json::from_slice(&event) {
             Ok(Event::GetSize) => Ok(storage.get(MRING_SERVICE.0 as u16, RING_SIZE)),
             Ok(Event::SetSize { size }) => {
-                if let Some(data) = storage.get(MRING_SERVICE.0 as u16, RING_SIZE) {
-                    return Ok(Some(data));
-                }
-                let mut data = vec![0; 8];
-                {
-                    let mut data = Cursor::new(&mut data[..]);
-                    data.put_u64_be(size);
-                }
-                storage.put(MRING_SERVICE.0 as u16, RING_SIZE, &data);
-
-                Ok(Some(data))
+                let size = if let Some(size) = self.size(storage) {
+                    size
+                } else {
+                    let mut data = vec![0; 8];
+                    {
+                        let mut data = Cursor::new(&mut data[..]);
+                        data.put_u64_be(size);
+                    }
+                    storage.put(MRING_SERVICE.0 as u16, RING_SIZE, &data);
+                    size
+                };
+                Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
             }
             Ok(Event::GetNodes) => Ok(storage.get(MRING_SERVICE.0 as u16, NODES)),
             Ok(Event::AddNode { node }) => {
@@ -151,6 +163,7 @@ where
                     let (next, relocations) = Placement::add_node(size, current, node.clone());
                     let msg = serde_json::to_value(&PSEvent::NodeAdded {
                         node,
+                        strategy: Placement::name(),
                         next: next.clone(),
                         relocations,
                     })
@@ -167,6 +180,7 @@ where
 
                     let msg = serde_json::to_value(&PSEvent::NodeAdded {
                         node,
+                        strategy: Placement::name(),
                         next: next.clone(),
                         relocations: placement::Relocations::new(),
                     })
@@ -195,6 +209,7 @@ where
                     let (next, relocations) = Placement::remove_node(size, current, node.clone());
                     let msg = serde_json::to_value(&PSEvent::NodeRemoved {
                         node,
+                        strategy: Placement::name(),
                         next: next.clone(),
                         relocations,
                     })
