@@ -19,6 +19,8 @@ import signal;
 import subprocess;
 import requests;
 import simplejson;
+import websocket;
+import threading;
 
 #
 # Simple ( simplistic ) library for driving test scripts
@@ -45,12 +47,6 @@ class Cluster():
             port = node['port']
             id = node['id']
 
-            rc = RaftClient()
-            rc.set_node_id(id)
-            rc.set_port(port)
-            rc.set_host("localhost")
-            self.clients.append(rc)
-
             us = UringServer()
             us.set_node_id(id)
             us.set_node_ports(ports)
@@ -60,6 +56,17 @@ class Cluster():
             us.start()
             self.servers.append(us)
 
+            time.sleep(1)
+
+            rc = RaftClient()
+            rc.set_node_id(id)
+            rc.set_port(port)
+            rc.set_host("localhost")
+            self.clients.append(rc)
+
+            time.sleep(1)
+
+            rc.ws_start()
 
             ports = rotate(ports)
 
@@ -70,7 +77,7 @@ class Cluster():
         for node in self.config:
             id = node['id']
             if id != '1':
-                requests.post("http://localhost:8081/node/{}".format(id))
+                requests.post("http://127.0.0.1:8081/node/{}".format(id))
 
 class UringServer():
     """Handles interactions with uring (raft) instance."""
@@ -122,6 +129,123 @@ class RaftClient():
         self.port = None
         self.handlers = {}
         self.callbacks = {}
+        self.ws = None
+        self.wsc_thread = None
+        self.rid = 0
+
+    def on_message(self, message):
+        print(message)
+        return message
+
+    def on_error(self, error):
+        print(error)
+        return error
+
+    def on_close(self):
+        print("### closed ###")
+
+    def ws_start(self):
+        self.ws = websocket.WebSocketApp(
+            "ws://127.0.0.1:{}/uring".format(self.port),
+            on_open=self.on_open,
+            on_message=self.on_message,
+            on_error=self.on_error,
+            on_close=self.on_close,
+        )
+        self.wsc_thread = threading.Thread(name='wsc', target=self.ws.run_forever)
+        self.wsc_thread.setDaemon(True)
+        self.wsc_thread.start()
+
+    def select(self, protocol):        
+        self.ws.send(simplejson.dumps({
+            "Select": {"rid": self.rid, "protocol": protocol }
+        }))
+        self.rid = self.rid + 1
+    
+    def execute_as(self, protocol, json):
+        self.ws.send(simplejson.dumps(
+            {
+                "As": {
+                    "protocol": protocol,
+                    "cmd": json
+                }
+            }
+        ))
+
+    def subscribe(self, channel):
+        self.ws.send(simplejson.dumps({
+            "Subscribe": {
+                "channel": channel
+            }
+        }))
+
+    def kv_get(self, key):
+        self.ws.send(simplejson.dumps({
+            "Get": {
+                "rid": self.rid,
+                "key": key
+            }
+        }))
+        self.rid = self.rid + 1
+
+    def kv_put(self, key, store):
+        self.ws.send(simplejson.dumps({
+            "Put": {
+                "rid": self.rid,
+                "key": key,
+                "store": store
+            }
+        }))
+        self.rid = self.rid + 1
+    
+    def kv_cas(self, key, check, store):
+        self.ws.send(simplejson.dumps({
+            "Cas": {
+                "rid": self.rid,
+                "key": key,
+                "check": check,
+                "store": store
+            }
+        }))
+        self.rid = self.rid + 1
+
+    def kv_delete(self, key):
+        self.ws.send(simplejson.dumps({
+            "Delete": {
+                "rid": self.rid,
+                "key": key
+            }
+        }))
+        self.rid = self.rid + 1
+
+    def mring_get_size(self):
+        self.ws.send(simplejson.dumps({
+            "GetSize": {
+                "rid": self.rid,
+            }
+        }))
+        self.rid = self.rid + 1
+
+    def mring_set_size(self, size):
+        self.ws.send(simplejson.dumps({
+            "SetSize": {
+                "rid": self.rid,
+                "size": size,
+            }
+        }))
+        self.rid = self.rid + 1
+
+    def mring_add_node(self, name):
+        self.ws.send(simplejson.dumps({
+            "AddNode": {
+                "rid": self.rid,
+                "node": name,
+            }
+        }))
+        self.rid = self.rid + 1
+
+    def on_open(self):
+        print("WS Open")
 
     def set_node_id(self, id):
         self.node_id = id
