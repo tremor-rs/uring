@@ -13,18 +13,16 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 
+use super::Reply;
 use super::*;
-use crate::{pubsub, NodeId, RequestId};
+use crate::{pubsub, NodeId};
 use actix::prelude::*;
 use actix_web_actors::ws;
 use serde::Serialize;
 use ws_proto::*;
 
 #[derive(Message, Serialize)]
-pub(crate) struct WsReply {
-    pub rid: RequestId,
-    pub data: Option<serde_json::Value>,
-}
+pub(crate) struct WsReply(pub ws_proto::Reply);
 
 /// websocket connection is long running connection, it easier
 /// to handle with an actor

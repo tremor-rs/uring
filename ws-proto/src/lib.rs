@@ -73,3 +73,9 @@ pub enum MRRequest {
     AddNode { rid: RequestId, node: String },
     RemoveNode { rid: RequestId, node: String },
 }
+
+#[derive(Deserialize, Serialize)]
+pub struct Reply {
+    pub rid: RequestId,
+    pub data: Option<serde_json::Value>,
+}

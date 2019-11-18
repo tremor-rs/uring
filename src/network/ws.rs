@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::io;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use ws_proto::Reply as ProtoReply;
 
 type LocalMailboxes = HashMap<NodeId, Addr<client::Connection>>;
 type RemoteMailboxes = HashMap<NodeId, Addr<server::Connection>>;
@@ -120,10 +121,10 @@ impl NetworkTrait for Network {
     fn event_reply(&mut self, id: EventId, data: Option<Vec<u8>>) -> Result<(), Error> {
         match self.pending.remove(&id) {
             Some(Reply::WS(rid, sender)) => sender
-                .send(WsReply {
+                .send(WsReply(ProtoReply {
                     rid,
                     data: data.and_then(|d| serde_json::from_slice(&d).ok()),
-                })
+                }))
                 .wait()
                 .unwrap(),
             Some(Reply::Direct(sender)) => sender.send(data).unwrap(),
