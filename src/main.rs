@@ -100,7 +100,6 @@ fn raft_loop<N: Network>(
 }
 
 fn main() -> std::io::Result<()> {
-    env_logger::init();
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let drain = slog_async::Async::new(drain).build().fuse();

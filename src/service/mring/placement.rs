@@ -13,19 +13,11 @@
 // limitations under the License.
 
 pub mod continuous;
-use super::{Node, Nodes};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
-#[derive(Default, Serialize, Deserialize, Debug, Clone)]
-pub struct Relocation {
-    destinations: HashMap<String, Vec<u64>>,
-}
-pub type Relocations = HashMap<String, Relocation>;
+use uring_common::{MRingNode, MRingNodes, Relocations};
 
 pub trait Placement {
-    fn add_node(count: u64, current: Vec<Node>, new: String) -> (Nodes, Relocations);
-    fn remove_node(count: u64, current: Vec<Node>, old: String) -> (Vec<Node>, Relocations);
-    fn new(count: u64, new: String) -> Vec<Node>;
+    fn add_node(count: u64, current: MRingNodes, new: String) -> (MRingNodes, Relocations);
+    fn remove_node(count: u64, current: MRingNodes, old: String) -> (MRingNodes, Relocations);
+    fn new(count: u64, new: String) -> MRingNodes;
     fn name() -> String;
 }

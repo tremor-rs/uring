@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use slog::{Key, Record, Value};
+use std::collections::HashMap;
 use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
@@ -114,6 +115,20 @@ impl fmt::Display for ProposalId {
         write!(f, "Proposal({:?})", self)
     }
 }
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
+pub struct Relocation {
+    pub destinations: HashMap<String, Vec<u64>>,
+}
+pub type Relocations = HashMap<String, Relocation>;
+
+#[derive(PartialEq, Default, Serialize, Deserialize, Debug, Clone)]
+pub struct MRingNode {
+    pub id: String,
+    pub vnodes: Vec<u64>,
+}
+
+pub type MRingNodes = Vec<MRingNode>;
 
 #[cfg(test)]
 mod tests {

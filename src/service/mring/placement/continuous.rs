@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Node, Nodes, Placement, Relocation, Relocations};
+use super::Placement;
+use uring_common::{MRingNode, MRingNodes, Relocation, Relocations};
 
 pub struct Strategy {}
 
@@ -20,15 +21,15 @@ impl Placement for Strategy {
     fn name() -> String {
         "continuous".into()
     }
-    fn new(count: u64, new: String) -> Nodes {
-        vec![Node {
+    fn new(count: u64, new: String) -> MRingNodes {
+        vec![MRingNode {
             id: new,
             vnodes: (0..count).collect(),
         }]
     }
-    fn add_node(count: u64, mut current: Vec<Node>, new: String) -> (Nodes, Relocations) {
+    fn add_node(count: u64, mut current: MRingNodes, new: String) -> (MRingNodes, Relocations) {
         let mut rs = Relocations::new();
-        let new_node = Node {
+        let new_node = MRingNode {
             id: new,
             vnodes: Vec::new(),
         };
@@ -60,7 +61,7 @@ impl Placement for Strategy {
         (current, rs)
     }
 
-    fn remove_node(count: u64, mut current: Vec<Node>, old: String) -> (Vec<Node>, Relocations) {
+    fn remove_node(count: u64, mut current: MRingNodes, old: String) -> (MRingNodes, Relocations) {
         let mut rs = Relocations::new();
         let mut i = 0;
         let vnodes_per_node = count as usize / (current.len() - 1);
@@ -157,7 +158,7 @@ mod test {
         let p = Strategy::new(8, "n1".into());
         assert_eq!(
             p,
-            vec![Node {
+            vec![MRingNode {
                 id: "n1".into(),
                 vnodes: vec![0, 1, 2, 3, 4, 5, 6, 7]
             }]
@@ -166,11 +167,11 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n1".into(),
                     vnodes: vec![0, 1, 2, 3]
                 },
-                Node {
+                MRingNode {
                     id: "n2".into(),
                     vnodes: vec![4, 5, 6, 7]
                 }
@@ -183,15 +184,15 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n1".into(),
                     vnodes: vec![0, 1, 2]
                 },
-                Node {
+                MRingNode {
                     id: "n2".into(),
                     vnodes: vec![3, 4, 5]
                 },
-                Node {
+                MRingNode {
                     id: "n3".into(),
                     vnodes: vec![6, 7]
                 }
@@ -205,19 +206,19 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n1".into(),
                     vnodes: vec![0, 1]
                 },
-                Node {
+                MRingNode {
                     id: "n2".into(),
                     vnodes: vec![2, 3]
                 },
-                Node {
+                MRingNode {
                     id: "n3".into(),
                     vnodes: vec![4, 5]
                 },
-                Node {
+                MRingNode {
                     id: "n4".into(),
                     vnodes: vec![6, 7]
                 }
@@ -232,19 +233,19 @@ mod test {
     #[test]
     fn continuous_remove_end() {
         let p = vec![
-            Node {
+            MRingNode {
                 id: "n1".into(),
                 vnodes: vec![0, 1],
             },
-            Node {
+            MRingNode {
                 id: "n2".into(),
                 vnodes: vec![2, 3],
             },
-            Node {
+            MRingNode {
                 id: "n3".into(),
                 vnodes: vec![4, 5],
             },
-            Node {
+            MRingNode {
                 id: "n4".into(),
                 vnodes: vec![6, 7],
             },
@@ -254,15 +255,15 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n1".into(),
                     vnodes: vec![0, 1, 2],
                 },
-                Node {
+                MRingNode {
                     id: "n2".into(),
                     vnodes: vec![3, 4, 5],
                 },
-                Node {
+                MRingNode {
                     id: "n3".into(),
                     vnodes: vec![6, 7],
                 },
@@ -278,11 +279,11 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n1".into(),
                     vnodes: vec![0, 1, 2, 3]
                 },
-                Node {
+                MRingNode {
                     id: "n2".into(),
                     vnodes: vec![4, 5, 6, 7]
                 }
@@ -295,7 +296,7 @@ mod test {
         let (p, mut r) = Strategy::remove_node(8, p, "n2".into());
         assert_eq!(
             p,
-            vec![Node {
+            vec![MRingNode {
                 id: "n1".into(),
                 vnodes: vec![0, 1, 2, 3, 4, 5, 6, 7]
             },]
@@ -307,19 +308,19 @@ mod test {
     #[test]
     fn continuous_remove_start() {
         let p = vec![
-            Node {
+            MRingNode {
                 id: "n1".into(),
                 vnodes: vec![0, 1],
             },
-            Node {
+            MRingNode {
                 id: "n2".into(),
                 vnodes: vec![2, 3],
             },
-            Node {
+            MRingNode {
                 id: "n3".into(),
                 vnodes: vec![4, 5],
             },
-            Node {
+            MRingNode {
                 id: "n4".into(),
                 vnodes: vec![6, 7],
             },
@@ -329,15 +330,15 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n2".into(),
                     vnodes: vec![0, 1, 2],
                 },
-                Node {
+                MRingNode {
                     id: "n3".into(),
                     vnodes: vec![3, 4, 5],
                 },
-                Node {
+                MRingNode {
                     id: "n4".into(),
                     vnodes: vec![6, 7],
                 },
@@ -352,11 +353,11 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n3".into(),
                     vnodes: vec![0, 1, 2, 3]
                 },
-                Node {
+                MRingNode {
                     id: "n4".into(),
                     vnodes: vec![4, 5, 6, 7]
                 }
@@ -369,7 +370,7 @@ mod test {
         let (p, mut r) = Strategy::remove_node(8, p, "n3".into());
         assert_eq!(
             p,
-            vec![Node {
+            vec![MRingNode {
                 id: "n4".into(),
                 vnodes: vec![0, 1, 2, 3, 4, 5, 6, 7]
             },]
@@ -381,19 +382,19 @@ mod test {
     #[test]
     fn continuous_remove_mid() {
         let p = vec![
-            Node {
+            MRingNode {
                 id: "n1".into(),
                 vnodes: vec![0, 1],
             },
-            Node {
+            MRingNode {
                 id: "n2".into(),
                 vnodes: vec![2, 3],
             },
-            Node {
+            MRingNode {
                 id: "n3".into(),
                 vnodes: vec![4, 5],
             },
-            Node {
+            MRingNode {
                 id: "n4".into(),
                 vnodes: vec![6, 7],
             },
@@ -403,15 +404,15 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n1".into(),
                     vnodes: vec![0, 1, 2],
                 },
-                Node {
+                MRingNode {
                     id: "n3".into(),
                     vnodes: vec![3, 4, 5],
                 },
-                Node {
+                MRingNode {
                     id: "n4".into(),
                     vnodes: vec![6, 7],
                 },
@@ -424,11 +425,11 @@ mod test {
         assert_eq!(
             p,
             vec![
-                Node {
+                MRingNode {
                     id: "n1".into(),
                     vnodes: vec![0, 1, 2, 3]
                 },
-                Node {
+                MRingNode {
                     id: "n4".into(),
                     vnodes: vec![4, 5, 6, 7]
                 }

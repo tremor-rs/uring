@@ -20,36 +20,10 @@ use bytes::BufMut;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::marker::PhantomData;
-
-pub type Nodes = Vec<Node>;
-
-#[derive(PartialEq, Default, Serialize, Deserialize, Debug, Clone)]
-pub struct Node {
-    id: String,
-    vnodes: Vec<u64>,
-}
+use uring_common::{MRingNodes, Relocations};
+use ws_proto::PSMRing;
 
 pub const MRING_SERVICE: ServiceId = ServiceId(1);
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum PSEvent {
-    SetSize {
-        size: u64,
-        strategy: String,
-    },
-    NodeAdded {
-        node: String,
-        strategy: String,
-        next: mring::Nodes,
-        relocations: placement::Relocations,
-    },
-    NodeRemoved {
-        node: String,
-        strategy: String,
-        next: mring::Nodes,
-        relocations: placement::Relocations,
-    },
-}
 
 pub struct Service<Placement>
 where
@@ -115,7 +89,7 @@ where
             })
     }
 
-    fn nodes<Storage>(&self, storage: &Storage) -> Option<mring::Nodes>
+    fn nodes<Storage>(&self, storage: &Storage) -> Option<MRingNodes>
     where
         Storage: storage::Storage,
     {
@@ -163,7 +137,7 @@ where
                 };
                 let next = if let Some(current) = self.nodes(storage) {
                     let (next, relocations) = Placement::add_node(size, current, node.clone());
-                    let msg = serde_json::to_value(&PSEvent::NodeAdded {
+                    let msg = serde_json::to_value(&PSMRing::NodeAdded {
                         node,
                         strategy: Placement::name(),
                         next: next.clone(),
@@ -180,11 +154,11 @@ where
                 } else {
                     let next = Placement::new(size, node.clone());
 
-                    let msg = serde_json::to_value(&PSEvent::NodeAdded {
+                    let msg = serde_json::to_value(&PSMRing::NodeAdded {
                         node,
                         strategy: Placement::name(),
                         next: next.clone(),
-                        relocations: placement::Relocations::new(),
+                        relocations: Relocations::new(),
                     })
                     .unwrap();
                     pubsub
@@ -209,7 +183,7 @@ where
 
                 if let Some(current) = self.nodes(storage) {
                     let (next, relocations) = Placement::remove_node(size, current, node.clone());
-                    let msg = serde_json::to_value(&PSEvent::NodeRemoved {
+                    let msg = serde_json::to_value(&PSMRing::NodeRemoved {
                         node,
                         strategy: Placement::name(),
                         next: next.clone(),

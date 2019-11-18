@@ -14,7 +14,6 @@
 // use crate::{NodeId, KV};
 
 use super::*;
-use crate::NodeId;
 use actix::io::SinkWrite;
 use actix::prelude::*;
 use actix_codec::Framed;
@@ -30,6 +29,7 @@ use futures::{
     Future,
 };
 use slog::Logger;
+use uring_common::NodeId;
 use ws_proto::{Protocol, ProtocolSelect};
 
 macro_rules! eat_error {

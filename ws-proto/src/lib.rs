@@ -79,3 +79,23 @@ pub struct Reply {
     pub rid: RequestId,
     pub data: Option<serde_json::Value>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum PSMRing {
+    SetSize {
+        size: u64,
+        strategy: String,
+    },
+    NodeAdded {
+        node: String,
+        strategy: String,
+        next: MRingNodes,
+        relocations: Relocations,
+    },
+    NodeRemoved {
+        node: String,
+        strategy: String,
+        next: MRingNodes,
+        relocations: Relocations,
+    },
+}
