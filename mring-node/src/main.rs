@@ -11,24 +11,23 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#![recursion_limit="512"]
+#![recursion_limit = "512"]
 
 use async_std::io;
 use async_std::prelude::*;
 use async_std::task;
 use async_tungstenite::connect_async;
-use futures::{StreamExt, select, FutureExt};
+use futures::{select, FutureExt, StreamExt};
 use slog::{Drain, Logger};
 use std::env;
 use tungstenite::protocol::Message;
 use uring_common::{NodeId, RequestId};
-use ws_proto::{Protocol, ProtocolSelect, PSMRing, SubscriberMsg};
+use ws_proto::{PSMRing, Protocol, ProtocolSelect, SubscriberMsg};
 
 #[macro_use]
 extern crate slog;
 
 async fn run(logger: Logger) {
-
     // Specify the server address to which the client will be connecting.
     let connect_addr = env::args()
         .nth(1)
@@ -58,11 +57,21 @@ async fn run(logger: Logger) {
     // more work from the remote then we can exit.
     let mut stdout = io::stdout();
     let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-    info!(logger, "WebSocket handshake has been successfully completed");
+    info!(
+        logger,
+        "WebSocket handshake has been successfully completed"
+    );
 
     // subscribe to uring messages
-    // 
-    ws_stream.send(Message::text(serde_json::to_string(&ProtocolSelect::Subscribe{channel: "mring".into()}).unwrap())).await;
+    //
+    ws_stream
+        .send(Message::text(
+            serde_json::to_string(&ProtocolSelect::Subscribe {
+                channel: "mring".into(),
+            })
+            .unwrap(),
+        ))
+        .await;
 
     loop {
         select! {
@@ -85,17 +94,35 @@ async fn run(logger: Logger) {
 
 async fn handle_msg(logger: &Logger, msg: Vec<u8>) {
     match serde_json::from_slice(&msg) {
-        Ok(SubscriberMsg::Msg{channel, msg}) => 
-            match serde_json::from_value(msg) {
-                Ok(PSMRing::SetSize{size, ..}) => info!(logger, "Size set to {}", size),
-                Ok(PSMRing::NodeAdded{node, next, relocations,..}) => info!(logger, "Node '{}' added: {:?}, next state: {:?}", node, relocations, next),
-                Ok(PSMRing::NodeRemoved{node, next, relocations,..}) => info!(logger, "Node '{}' removed: {:?}, next state: {:?}", node, relocations, next),
-                Err(e) => error!(logger, "failed to decode: {}", e)
-            
+        Ok(SubscriberMsg::Msg { channel, msg }) => match serde_json::from_value(msg) {
+            Ok(PSMRing::SetSize { size, .. }) => info!(logger, "Size set to {}", size),
+            Ok(PSMRing::NodeAdded {
+                node,
+                next,
+                relocations,
+                ..
+            }) => info!(
+                logger,
+                "Node '{}' added: {:?}, next state: {:?}", node, relocations, next
+            ),
+            Ok(PSMRing::NodeRemoved {
+                node,
+                next,
+                relocations,
+                ..
+            }) => info!(
+                logger,
+                "Node '{}' removed: {:?}, next state: {:?}", node, relocations, next
+            ),
+            Err(e) => error!(logger, "failed to decode: {}", e),
         },
-        Err(e) => error!(logger, "failed to decode: {} for '{:?}'", e, String::from_utf8(msg))
+        Err(e) => error!(
+            logger,
+            "failed to decode: {} for '{:?}'",
+            e,
+            String::from_utf8(msg)
+        ),
     }
-
 }
 
 async fn read_stdin(tx: futures::channel::mpsc::UnboundedSender<Message>) {
@@ -107,10 +134,10 @@ async fn read_stdin(tx: futures::channel::mpsc::UnboundedSender<Message>) {
             Ok(n) => n,
         };
         buf.truncate(n);
-        tx.unbounded_send(Message::text(String::from_utf8(buf).unwrap())).unwrap();
+        tx.unbounded_send(Message::text(String::from_utf8(buf).unwrap()))
+            .unwrap();
     }
 }
-
 
 fn main() {
     let decorator = slog_term::TermDecorator::new().build();
@@ -118,4 +145,5 @@ fn main() {
     let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root(drain, o!());
 
-    task::block_on(run(logger))}
+    task::block_on(run(logger))
+}
