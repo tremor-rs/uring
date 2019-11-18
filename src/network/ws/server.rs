@@ -180,25 +180,24 @@ impl Connection {
                 self.hb = Instant::now();
             }
             ws::Message::Text(text) => {
-                let msg: ProtocolSelect = serde_json::from_str(&text).unwrap();
-                match msg {
-                    ProtocolSelect::Select { rid, protocol } => {
+                match serde_json::from_str(&text) {
+                    Ok(ProtocolSelect::Select { rid, protocol }) => {
                         self.protocol = Some(protocol);
                         ctx.text(
                             serde_json::to_string(&ProtocolSelect::Selected { rid, protocol })
                                 .unwrap(),
                         );
                     }
-                    ProtocolSelect::Selected { .. } => {
+                    Ok(ProtocolSelect::Selected { .. }) => {
                         ctx.stop();
                     }
-                    ProtocolSelect::As { protocol, cmd } => match protocol {
+                    Ok(ProtocolSelect::As { protocol, cmd }) => match protocol {
                         Protocol::KV => {
                             self.handle_kv_msg(serde_json::from_value(cmd).unwrap(), ctx)
                         }
                         _ => ctx.stop(),
                     },
-                    ProtocolSelect::Subscribe { channel } => {
+                    Ok(ProtocolSelect::Subscribe { channel }) => {
                         let (tx, rx) = bounded(10);
                         self.node
                             .pubsub
@@ -208,6 +207,10 @@ impl Connection {
                         let stream = pubsub::Stream::new(rx);
                         Self::add_stream(stream, ctx);
                     }
+                    Err(e) => error!(
+                        self.node.logger,
+                        "Failed to decode ProtocolSelect message: {} => {}", e, text
+                    ),
                 }
 
                 //ctx.text(text)
@@ -232,25 +235,28 @@ impl Connection {
                 self.hb = Instant::now();
             }
             ws::Message::Text(text) => {
-                let msg: CtrlMsg = serde_json::from_str(&text).unwrap();
-                match msg {
-                    CtrlMsg::Hello(id, peer) => {
+                match serde_json::from_str(&text) {
+                    Ok(CtrlMsg::Hello(id, peer)) => {
                         self.remote_id = id;
                         self.node
                             .tx
                             .send(UrMsg::RegisterRemote(id, peer, ctx.address()))
                             .unwrap();
                     }
-                    CtrlMsg::AckProposal(pid, success) => {
+                    Ok(CtrlMsg::AckProposal(pid, success)) => {
                         self.node.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
                     }
-                    CtrlMsg::ForwardProposal(from, pid, key, value) => {
+                    Ok(CtrlMsg::ForwardProposal(from, pid, key, value)) => {
                         self.node
                             .tx
                             .send(UrMsg::ForwardProposal(from, pid, key, value))
                             .unwrap();
                     }
-                    _ => (),
+                    Ok(_) => (),
+                    Err(e) => error!(
+                        self.node.logger,
+                        "Failed to decode CtrlMsg message: {} => {}", e, text
+                    ),
                 }
                 //ctx.text(text)
             }
@@ -274,9 +280,13 @@ impl Connection {
             ws::Message::Pong(_) => {
                 self.hb = Instant::now();
             }
-            ws::Message::Text(text) => {
-                self.handle_kv_msg(serde_json::from_str(&text).unwrap(), ctx)
-            }
+            ws::Message::Text(text) => match serde_json::from_str(&text) {
+                Ok(msg) => self.handle_kv_msg(msg, ctx),
+                Err(e) => error!(
+                    self.node.logger,
+                    "Failed to decode KVRequest message: {} => {}", e, text
+                ),
+            },
             ws::Message::Binary(_) => {
                 ctx.stop();
             }
@@ -342,9 +352,13 @@ impl Connection {
             ws::Message::Pong(_) => {
                 self.hb = Instant::now();
             }
-            ws::Message::Text(text) => {
-                self.handle_mring_msg(serde_json::from_str(&text).unwrap(), ctx)
-            }
+            ws::Message::Text(text) => match serde_json::from_str(&text) {
+                Ok(msg) => self.handle_mring_msg(msg, ctx),
+                Err(e) => error!(
+                    self.node.logger,
+                    "Failed to decode MRRequest message: {} => {}", e, text
+                ),
+            },
             ws::Message::Binary(_) => {
                 ctx.stop();
             }
