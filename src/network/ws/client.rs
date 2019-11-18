@@ -13,7 +13,6 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 
-use super::server::{Protocol, ProtocolSelect};
 use super::*;
 use crate::NodeId;
 use actix::io::SinkWrite;
@@ -31,6 +30,7 @@ use futures::{
     Future,
 };
 use slog::Logger;
+use ws_proto::{Protocol, ProtocolSelect};
 
 macro_rules! eat_error {
     ($l:expr, $e:expr) => {

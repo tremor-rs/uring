@@ -28,112 +28,13 @@ use crate::service::mring::{Service as MRingService, MRING_SERVICE};
 use crate::storage::URRocksStorage;
 use clap::{App as ClApp, Arg};
 use serde::{Deserialize, Serialize};
-use slog::{Drain, Key, Logger, Record, Value};
+use slog::{Drain, Logger};
+use std::thread;
 use std::time::{Duration, Instant};
-use std::{fmt, thread};
+pub use uring_common::*;
 
 #[macro_use]
 extern crate slog;
-
-#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
-pub struct NodeId(u64);
-
-impl Value for NodeId {
-    fn serialize(
-        &self,
-        _rec: &Record,
-        key: Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_u64(key, self.0)
-    }
-}
-
-impl fmt::Display for NodeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Node({:?})", self)
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
-pub struct RequestId(u64);
-
-impl Value for RequestId {
-    fn serialize(
-        &self,
-        _rec: &Record,
-        key: Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_u64(key, self.0)
-    }
-}
-
-impl fmt::Display for RequestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Request({:?})", self)
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
-pub struct EventId(u64);
-
-impl Value for EventId {
-    fn serialize(
-        &self,
-        _rec: &Record,
-        key: Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_u64(key, self.0)
-    }
-}
-
-impl fmt::Display for EventId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Event({:?})", self)
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
-pub struct ServiceId(u64);
-
-impl Value for ServiceId {
-    fn serialize(
-        &self,
-        _rec: &Record,
-        key: Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_u64(key, self.0)
-    }
-}
-
-impl fmt::Display for ServiceId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Service({:?})", self)
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
-pub struct ProposalId(u64);
-
-impl Value for ProposalId {
-    fn serialize(
-        &self,
-        _rec: &Record,
-        key: Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        serializer.emit_u64(key, self.0)
-    }
-}
-
-impl fmt::Display for ProposalId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Proposal({:?})", self)
-    }
-}
 
 #[derive(Deserialize, Serialize)]
 pub struct KV {

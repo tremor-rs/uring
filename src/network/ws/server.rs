@@ -17,64 +17,13 @@ use super::*;
 use crate::{pubsub, NodeId, RequestId};
 use actix::prelude::*;
 use actix_web_actors::ws;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use ws_proto::*;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub enum Protocol {
-    URing,
-    KV,
-    MRing,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum ProtocolSelect {
-    Select {
-        rid: RequestId,
-        protocol: Protocol,
-    },
-    Selected {
-        rid: RequestId,
-        protocol: Protocol,
-    },
-    As {
-        protocol: Protocol,
-        cmd: serde_json::Value,
-    },
-    Subscribe {
-        channel: String,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum KVRequest {
-    Get {
-        rid: RequestId,
-        key: String,
-    },
-    Put {
-        rid: RequestId,
-        key: String,
-        store: String,
-    },
-    Delete {
-        rid: RequestId,
-        key: String,
-    },
-    Cas {
-        rid: RequestId,
-        key: String,
-        check: String,
-        store: String,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum MRRequest {
-    SetSize { rid: RequestId, size: u64 },
-    GetSize { rid: RequestId },
-    GetNodes { rid: RequestId },
-    AddNode { rid: RequestId, node: String },
-    RemoveNode { rid: RequestId, node: String },
+#[derive(Message, Serialize)]
+pub(crate) struct WsReply {
+    pub rid: RequestId,
+    pub data: Option<serde_json::Value>,
 }
 
 /// websocket connection is long running connection, it easier
@@ -102,12 +51,6 @@ impl Actor for Connection {
             .send(UrMsg::DownRemote(self.remote_id))
             .unwrap();
     }
-}
-
-#[derive(Message, Serialize)]
-pub(crate) struct WsReply {
-    pub rid: RequestId,
-    pub data: Option<serde_json::Value>,
 }
 
 /// Handler for `ws::Message`
