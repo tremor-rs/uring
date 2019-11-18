@@ -29,7 +29,7 @@ pub enum SubscriberMsg {
     },
 }
 pub enum Msg {
-    Subscrube {
+    Subscribe {
         channel: String,
         tx: Sender<SubscriberMsg>,
     },
@@ -66,7 +66,7 @@ fn pubsub_loop(logger: Logger, rx: Receiver<Msg>) {
     let mut subscriptions: HashMap<String, Vec<Sender<SubscriberMsg>>> = HashMap::new();
     for msg in rx {
         match msg {
-            Msg::Subscrube { channel, tx } => {
+            Msg::Subscribe { channel, tx } => {
                 debug!(logger, "Sub {}", channel);
                 let subscriptions = subscriptions.entry(channel).or_default();
                 subscriptions.push(tx);

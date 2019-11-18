@@ -202,7 +202,7 @@ impl Connection {
                         let (tx, rx) = bounded(10);
                         self.node
                             .pubsub
-                            .send(pubsub::Msg::Subscrube { channel, tx })
+                            .send(pubsub::Msg::Subscribe { channel, tx })
                             .unwrap();
 
                         let stream = pubsub::Stream::new(rx);
