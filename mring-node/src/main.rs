@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#![recursion_limit="256"]
+#![recursion_limit="512"]
 
 use async_std::io;
 use async_std::prelude::*;
@@ -22,7 +22,7 @@ use slog::{Drain, Logger};
 use std::env;
 use tungstenite::protocol::Message;
 use uring_common::{NodeId, RequestId};
-use ws_proto::{Protocol, ProtocolSelect, PSMRing};
+use ws_proto::{Protocol, ProtocolSelect, PSMRing, SubscriberMsg};
 
 #[macro_use]
 extern crate slog;
@@ -73,13 +73,7 @@ async fn run(logger: Logger) {
             msg = ws_stream.next().fuse() => match msg {
                 Some(Ok(msg)) =>{
                     if msg.is_text() {
-                        let msg = msg.into_data();
-                        match serde_json::from_slice(&msg) {
-                            Ok(PSMRing::SetSize{size, ..}) => stdout.write_all(format!("Size set to {}", size).as_str().as_bytes()).await.unwrap(),
-                            Ok(PSMRing::NodeAdded{node, next, relocations,..}) => stdout.write_all(format!("Node '{}' added: {:?}", node, relocations).as_str().as_bytes()).await.unwrap(),
-                            Ok(PSMRing::NodeRemoved{node, next, relocations,..}) => stdout.write_all(format!("Node '{}' removed: {:?}", node, relocations).as_str().as_bytes()).await.unwrap(),
-                            Err(e) => error!(logger, "failed to decode: {} for '{:?}'", e, String::from_utf8(msg))
-                        }
+                        handle_msg(&logger, msg.into_data()).await;
                     }
                 },
                 Some(Err(_e)) => break,
@@ -87,6 +81,21 @@ async fn run(logger: Logger) {
             }
         }
     }
+}
+
+async fn handle_msg(logger: &Logger, msg: Vec<u8>) {
+    match serde_json::from_slice(&msg) {
+        Ok(SubscriberMsg::Msg{channel, msg}) => 
+            match serde_json::from_value(msg) {
+                Ok(PSMRing::SetSize{size, ..}) => info!(logger, "Size set to {}", size),
+                Ok(PSMRing::NodeAdded{node, next, relocations,..}) => info!(logger, "Node '{}' added: {:?}, next state: {:?}", node, relocations, next),
+                Ok(PSMRing::NodeRemoved{node, next, relocations,..}) => info!(logger, "Node '{}' removed: {:?}, next state: {:?}", node, relocations, next),
+                Err(e) => error!(logger, "failed to decode: {}", e)
+            
+        },
+        Err(e) => error!(logger, "failed to decode: {} for '{:?}'", e, String::from_utf8(msg))
+    }
+
 }
 
 async fn read_stdin(tx: futures::channel::mpsc::UnboundedSender<Message>) {

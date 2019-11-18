@@ -99,3 +99,11 @@ pub enum PSMRing {
         relocations: Relocations,
     },
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum SubscriberMsg {
+    Msg {
+        channel: String,
+        msg: serde_json::Value,
+    },
+}

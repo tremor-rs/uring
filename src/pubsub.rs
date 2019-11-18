@@ -14,20 +14,13 @@
 // use crate::{NodeId, KV};
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use futures::{Async, Poll};
-use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
 use std::thread::{self, JoinHandle};
+use ws_proto::SubscriberMsg;
 
 pub type Channel = Sender<Msg>;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum SubscriberMsg {
-    Msg {
-        channel: String,
-        msg: serde_json::Value,
-    },
-}
 pub enum Msg {
     Subscribe {
         channel: String,
@@ -67,12 +60,12 @@ fn pubsub_loop(logger: Logger, rx: Receiver<Msg>) {
     for msg in rx {
         match msg {
             Msg::Subscribe { channel, tx } => {
-                debug!(logger, "Sub {}", channel);
+                info!(logger, "Sub {}", channel);
                 let subscriptions = subscriptions.entry(channel).or_default();
                 subscriptions.push(tx);
             }
             Msg::Msg { channel, msg } => {
-                debug!(logger, "Msg: {} >> {}", channel, msg);
+                info!(logger, "Msg: {} >> {}", channel, msg);
                 let subscriptions = subscriptions.entry(channel.clone()).or_default();
                 *subscriptions = subscriptions
                     .iter()

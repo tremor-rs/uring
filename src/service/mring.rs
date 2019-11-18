@@ -126,6 +126,19 @@ where
                     storage.put(MRING_SERVICE.0 as u16, RING_SIZE, &data);
                     size
                 };
+                let msg = serde_json::to_value(&PSMRing::SetSize {
+                    size,
+                    strategy: Placement::name(),
+                })
+                .unwrap();
+
+                pubsub
+                    .send(pubsub::Msg::Msg {
+                        channel: "mring".into(),
+                        msg: msg,
+                    })
+                    .unwrap();
+
                 Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
             }
             Ok(Event::GetNodes) => Ok(storage.get(MRING_SERVICE.0 as u16, NODES)),
