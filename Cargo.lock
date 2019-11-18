@@ -1139,6 +1139,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mring-node"
+version = "0.1.0"
+dependencies = [
+ "uring-common 0.1.0",
+ "ws-proto 0.1.0",
+]
+
+[[package]]
 name = "net2"
 version = "0.2.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
