@@ -94,13 +94,6 @@ fn raft_loop<N: Network>(
 }
 
 fn main() -> std::io::Result<()> {
-    let drain = slog_json::Json::default(std::io::stderr()).map(slog::Fuse);
-    // let decorator = slog_term::TermDecorator::new().build();
-    // let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
-    let logger = slog::Logger::root(drain, o!());
-
-    //std::env::set_var("RUST_LOG", "actix_server=info,actix_web=info");
     let matches = ClApp::new("cake")
         .version("1.0")
         .author("The Treamor Team")
@@ -119,6 +112,14 @@ fn main() -> std::io::Result<()> {
                 .long("bootstrap")
                 .value_name("BOOTSTRAP")
                 .help("Sets the node to bootstrap and become leader")
+                .takes_value(false),
+        )
+        .arg(
+            Arg::with_name("no-json")
+                .short("n")
+                .long("no-json")
+                .value_name("NOJSON")
+                .help("don't log via json")
                 .takes_value(false),
         )
         .arg(
@@ -141,6 +142,16 @@ fn main() -> std::io::Result<()> {
         )
         .get_matches();
 
+    let logger = if matches.is_present("no-json") {
+        let decorator = slog_term::TermDecorator::new().build();
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        let drain = slog_async::Async::new(drain).build().fuse();
+        slog::Logger::root(drain, o!())
+    } else {
+        let drain = slog_json::Json::default(std::io::stderr()).map(slog::Fuse);
+        let drain = slog_async::Async::new(drain).build().fuse();
+        slog::Logger::root(drain, o!())
+    };
     let peers = matches.values_of_lossy("peers").unwrap_or(vec![]);
     let bootstrap = matches.is_present("bootstrap");
     let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
