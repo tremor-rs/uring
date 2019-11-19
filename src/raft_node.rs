@@ -222,17 +222,15 @@ where
             let prev_state = format!("{:?}", self.last_state);
             let next_state = format!("{:?}", this_state);
             debug!(&self.logger, "State transition"; "last-state" => prev_state.clone(), "next-state" => next_state.clone());
-            let msg = serde_json::to_value(&PSURing::StateChange {
-                prev_state,
-                next_state,
-                node: self.id,
-            })
-            .unwrap();
             self.pubsub
-                .send(pubsub::Msg::Msg {
-                    channel: "uring".into(),
-                    msg: msg,
-                })
+                .send(pubsub::Msg::new(
+                    "uring",
+                    PSURing::StateChange {
+                        prev_state,
+                        next_state,
+                        node: self.id,
+                    },
+                ))
                 .unwrap();
             self.last_state = this_state.clone();
         }
