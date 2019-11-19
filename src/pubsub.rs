@@ -14,6 +14,7 @@
 // use crate::{NodeId, KV};
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use futures::{Async, Poll};
+use serde::Serialize;
 use slog::Logger;
 use std::collections::HashMap;
 use std::thread::{self, JoinHandle};
@@ -32,6 +33,16 @@ pub enum Msg {
     },
 }
 
+impl Msg {
+    pub fn new<T>(channel: &str, msg: T) -> Self
+    where
+        T: Serialize,
+    {
+        let msg = serde_json::to_value(&msg).unwrap();
+        let channel = channel.to_string();
+        Self::Msg { channel, msg }
+    }
+}
 pub enum Error {
     Disconnected,
 }

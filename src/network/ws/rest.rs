@@ -18,11 +18,8 @@ use super::*;
 use crate::{NodeId, KV};
 use actix_web::{http::StatusCode, web, Error as ActixError, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
-
-use byteorder::{BigEndian, ReadBytesExt};
 use crossbeam_channel::bounded;
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
 
 /// do websocket handshake and start `UrSocket` actor
 pub(crate) fn uring_index(

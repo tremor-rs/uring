@@ -126,17 +126,15 @@ where
                     storage.put(MRING_SERVICE.0 as u16, RING_SIZE, &data);
                     size
                 };
-                let msg = serde_json::to_value(&PSMRing::SetSize {
-                    size,
-                    strategy: Placement::name(),
-                })
-                .unwrap();
 
                 pubsub
-                    .send(pubsub::Msg::Msg {
-                        channel: "mring".into(),
-                        msg: msg,
-                    })
+                    .send(pubsub::Msg::new(
+                        "mring",
+                        PSMRing::SetSize {
+                            size,
+                            strategy: Placement::name(),
+                        },
+                    ))
                     .unwrap();
 
                 Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
@@ -150,37 +148,32 @@ where
                 };
                 let next = if let Some(current) = self.nodes(storage) {
                     let (next, relocations) = Placement::add_node(size, current, node.clone());
-                    let msg = serde_json::to_value(&PSMRing::NodeAdded {
-                        node,
-                        strategy: Placement::name(),
-                        next: next.clone(),
-                        relocations,
-                    })
-                    .unwrap();
                     pubsub
-                        .send(pubsub::Msg::Msg {
-                            channel: "mring".into(),
-                            msg: msg,
-                        })
+                        .send(pubsub::Msg::new(
+                            "mring",
+                            PSMRing::NodeAdded {
+                                node,
+                                strategy: Placement::name(),
+                                next: next.clone(),
+                                relocations,
+                            },
+                        ))
                         .unwrap();
                     next
                 } else {
                     let next = Placement::new(size, node.clone());
 
-                    let msg = serde_json::to_value(&PSMRing::NodeAdded {
-                        node,
-                        strategy: Placement::name(),
-                        next: next.clone(),
-                        relocations: Relocations::new(),
-                    })
-                    .unwrap();
                     pubsub
-                        .send(pubsub::Msg::Msg {
-                            channel: "mring".into(),
-                            msg: msg,
-                        })
+                        .send(pubsub::Msg::new(
+                            "mring",
+                            PSMRing::NodeAdded {
+                                node,
+                                strategy: Placement::name(),
+                                next: next.clone(),
+                                relocations: Relocations::new(),
+                            },
+                        ))
                         .unwrap();
-
                     next
                 };
                 let next = serde_json::to_vec(&next).unwrap();
@@ -196,18 +189,16 @@ where
 
                 if let Some(current) = self.nodes(storage) {
                     let (next, relocations) = Placement::remove_node(size, current, node.clone());
-                    let msg = serde_json::to_value(&PSMRing::NodeRemoved {
-                        node,
-                        strategy: Placement::name(),
-                        next: next.clone(),
-                        relocations,
-                    })
-                    .unwrap();
                     pubsub
-                        .send(pubsub::Msg::Msg {
-                            channel: "mring".into(),
-                            msg: msg,
-                        })
+                        .send(pubsub::Msg::new(
+                            "mring",
+                            PSMRing::NodeRemoved {
+                                node,
+                                strategy: Placement::name(),
+                                next: next.clone(),
+                                relocations,
+                            },
+                        ))
                         .unwrap();
                     let next = serde_json::to_vec(&next).unwrap();
                     storage.put(MRING_SERVICE.0 as u16, NODES, &next);
