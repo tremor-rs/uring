@@ -15,6 +15,7 @@ def report(_subject,json):
 time.sleep(1)
 rc.subscribe('kv', lambda json: report('KV', json))
 rc.subscribe('mring', lambda json: report('MRing', json))
+rc.subscribe('uring', lambda json: report('URing', json))
 
 for line in sys.stdin.readline():
    rc.ws_stop()
