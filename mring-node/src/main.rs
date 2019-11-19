@@ -14,13 +14,22 @@
 
 #![recursion_limit = "512"]
 
+mod mring_listener;
+mod vnode_manager;
+use mring_listener::*;
+use vnode_manager::*;
+
+use async_std::net::{SocketAddr, ToSocketAddrs};
+use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
 use async_std::sync::{Arc, RwLock};
 use async_std::{io, task};
 use async_tungstenite::connect_async;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::stream::Stream;
 use futures::task::Poll;
-use futures::{select, FutureExt, StreamExt};
+use futures::{select, StreamExt};
+use serde::{Deserialize, Serialize};
 use slog::{Drain, Logger};
 use std::collections::{HashMap, VecDeque};
 use std::env;
@@ -28,7 +37,6 @@ use std::time::Duration;
 use tungstenite::protocol::Message;
 use uring_common::{MRingNodes, Relocations, RequestId};
 use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
-use serde::{Serialize, Deserialize};
 
 #[macro_use]
 extern crate slog;
@@ -40,213 +48,121 @@ struct VNode {
 }
 
 enum Task {
-    Relocate { target: String, vnode: u64 },
+    MigrateOut { target: String, vnode: u64 },
+    Assign { vnodes: Vec<u64> },
+    MigrateIn { vnode: u64, data: Vec<String> },
 }
 
-async fn run(logger: Logger) {
-    let id = env::args()
-        .nth(1)
-        .unwrap_or_else(|| panic!("this program requires at least two arguments"));
-    // Specify the server address to which the client will be connecting.
-    let connect_addr = env::args()
-        .nth(2)
-        .unwrap_or_else(|| panic!("this program requires at least two argument"));
+struct Connection {
+    addr: SocketAddr,
+    rx: UnboundedReceiver<Message>,
+    tx: UnboundedSender<Message>,
+}
 
-    dbg!(&connect_addr);
-    let url = url::Url::parse(&connect_addr).unwrap();
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum Migration {
+    Start { id: u64 },
+    Data { id: u64, data: Vec<String> },
+    Finish { id: u64 },
+}
 
-    // After the TCP connection has been established, we set up our client to
-    // start forwarding data.
-    //
-    // First we do a WebSocket handshake on a TCP stream, i.e. do the upgrade
-    // request.
-    //
-    // Half of the work we're going to do is to take all data we receive on
-    // stdin (`stdin_rx`) and send that along the WebSocket stream (`sink`).
-    // The second half is to take all the data we receive (`stream`) and then
-    // write that to stdout. Currently we just write to stdout in a synchronous
-    // fashion.
-    //
-    // Finally we set the client to terminate once either half of this work
-    // finishes. If we don't have any more data to read or we won't receive any
-    // more work from the remote then we can exit.
-    let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-    info!(
-        logger,
-        "WebSocket handshake has been successfully completed"
-    );
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum MigrationAck {
+    Start { id: u64 },
+    Data { id: u64 },
+    Finish { id: u64 },
+}
 
-    let vnodes: Arc<RwLock<HashMap<u64, VNode>>> = Arc::new(RwLock::new(HashMap::new()));
+async fn handle_connection(logger: Logger, connection: Connection) {
+    let mut connection = connection;
+    while let Some(msg) = connection.rx.next().await {
+        info!(
+            logger,
+            "Received a message from {}: {}", connection.addr, msg
+        );
+        connection
+            .tx
+            .unbounded_send(msg)
+            .expect("Failed to forward message");
+    }
+}
 
-    let (mut tasks_tx, tasks_rx) = futures::channel::mpsc::unbounded();
+async fn accept_connection(logger: Logger, stream: TcpStream, mut tasks: UnboundedSender<Task>) {
+    let addr = stream
+        .peer_addr()
+        .expect("connected streams should have a peer address");
+    info!(logger, "Peer address: {}", addr);
 
-    let tick_handle = task::spawn(tick_loop(
-        logger.clone(),
-        id.to_string(),
-        vnodes.clone(),
-        tasks_rx,
-    ));
+    let mut ws_stream = async_tungstenite::accept_async(stream)
+        .await
+        .expect("Error during the websocket handshake occurred");
 
-    // subscribe to uring messages
-    //
-    ws_stream
-        .send(Message::text(
-            serde_json::to_string(&ProtocolSelect::Subscribe {
-                channel: "mring".into(),
-            })
-            .unwrap(),
-        ))
-        .await.unwrap();
+    info!(logger, "New WebSocket connection: {}", addr);
 
-    ws_stream
-        .send(Message::text(
-            serde_json::to_string(&ProtocolSelect::Select {
-                protocol: Protocol::MRing,
-                rid: RequestId(1),
-            })
-            .unwrap(),
-        ))
-        .await.unwrap();
+    // Create a channel for our stream, which other sockets will use to
+    // send us messages. Then register our address with the stream to send
+    // data to us.
+    let (msg_tx, msg_rx) = futures::channel::mpsc::unbounded();
+    let (response_tx, mut response_rx) = futures::channel::mpsc::unbounded();
+    let c = Connection {
+        addr: addr,
+        rx: msg_rx,
+        tx: response_tx,
+    };
+    task::spawn(handle_connection(logger.clone(), c));
 
-    ws_stream
-        .send(Message::text(
-            serde_json::to_string(&MRRequest::AddNode {
-                node: id.to_string(),
-                rid: RequestId(2),
-            })
-            .unwrap(),
-        ))
-        .await.unwrap();
-
-    loop {
-        select! {
-            msg = ws_stream.next().fuse() => match msg {
-                Some(Ok(msg)) =>{
-                    if msg.is_text() {
-                        handle_msg(&logger, &id, & vnodes, &mut tasks_tx, msg.into_data()).await;
+    let mut vnode_id = None;
+    while let Some(Ok(message)) = ws_stream.next().await {
+        msg_tx
+            .unbounded_send(message)
+            .expect("Failed to forward request");
+        if let Some(msg) = response_rx.next().await {
+            match serde_json::from_slice(&msg.into_data()) {
+                Ok(Migration::Start { id }) => {
+                    vnode_id = Some(id);
+                    info!(logger, "migration for node {} started", id);
+                }
+                Ok(Migration::Data { data, id }) => {
+                    if let Some(vnode) = vnode_id {
+                        tasks
+                        .unbounded_send(Task::MigrateIn { data, vnode })
+                        .unwrap();
                     }
-                },
-                Some(Err(_e)) => break,
-                None => break,
-            },
-        }
-    }
-    drop(tasks_tx);
-    tick_handle.await
-}
-
-async fn tick_loop(
-    logger: Logger,
-    _id: String,
-    vnodes: Arc<RwLock<HashMap<u64, VNode>>>,
-    mut tasks: futures::channel::mpsc::UnboundedReceiver<Task>,
-) {
-    let mut ticks = async_std::stream::interval(Duration::from_secs(1));
-    while ticks.next().await.is_some() {
-        select! {
-            task = tasks.next() =>
-            match task {
-                Some(Task::Relocate { target, vnode }) => {
-                    let mut vnodes = vnodes.write().await;
-                    let success = vnodes.remove(&vnode).is_some();
-                    info!(
-                        logger,
-                        "relocating vnode {} to node {} => success: {}", vnode, target, success
-                    );
-                },
-                None => break,
-            },
-            complete => break,
-            default => ()
-        }
-    }
-}
-
-async fn handle_msg(
-    logger: &Logger,
-    id: &str,
-    vnodes: &Arc<RwLock<HashMap<u64, VNode>>>,
-    tasks: &mut futures::channel::mpsc::UnboundedSender<Task>,
-    msg: Vec<u8>,
-) {
-    match serde_json::from_slice(&msg) {
-        Ok(SubscriberMsg::Msg {  msg,.. }) => match serde_json::from_value(msg) {
-            Ok(PSMRing::SetSize { size, .. }) => info!(logger, "Size set to {}", size),
-            Ok(PSMRing::NodeAdded {
-                node,
-                next,
-                relocations,
-                ..
-            }) => {
-                info!(logger, "Node '{}' added", node);
-                handle_change(logger, &id, vnodes, tasks, relocations, next).await;
-            }
-            Ok(PSMRing::NodeRemoved {
-                node,
-                next,
-                relocations,
-                ..
-            }) => {
-                info!(logger, "Node '{}' removed", node,);
-                handle_change(logger, &id, vnodes, tasks, relocations, next).await;
-            }
-            Err(e) => error!(logger, "failed to decode: {}", e),
-        },
-        Err(e) => {
-            if serde_json::from_slice::<Reply>(&msg).is_err()
-                && serde_json::from_slice::<ProtocolSelect>(&msg).is_err()
-            {
-                error!(
-                    logger,
-                    "failed to decode: {} for '{:?}'",
-                    e,
-                    String::from_utf8(msg)
-                )
-            }
-        }
-    }
-}
-
-async fn handle_change(
-    logger: &Logger,
-    id: &str,
-    vnodes: &Arc<RwLock<HashMap<u64, VNode>>>,
-    tasks: &mut futures::channel::mpsc::UnboundedSender<Task>,
-    mut relocations: Relocations,
-    next: MRingNodes,
-) {
-    // This is an initial assignment
-    if relocations.is_empty() {
-        if let Some(vnode) = next.into_iter().filter(|v| v.id == id).next() {
-            let is_empty = {
-                let vnodes = vnodes.read().await;
-                vnodes.is_empty()
-            };
-            if is_empty {
-                info!(logger, "Initializing with {:?}", vnode.vnodes);
-                let my_id = id;
-                let mut vnodes = vnodes.write().await;
-                for id in vnode.vnodes {
-                    vnodes.insert(
-                        id,
-                        VNode {
-                            id,
-                            history: vec![my_id.to_string()],
-                        },
-                    );
                 }
-            }
-        }
-    } else {
-        if let Some(relocations) = relocations.remove(id) {
-            for (target, ids) in relocations.destinations.into_iter() {
-                for vnode in ids {
-                    let target = target.clone();
-                    tasks.unbounded_send(Task::Relocate { target, vnode }).unwrap();
+                Ok(Migration::Finish { id }) => {
+                    vnode_id = None;
+                    info!(logger, "migration for node {} finished", id);
                 }
+                Err(e) => error!(logger, "failed to decode: {}", e),
             }
+            /*
+            if ws_stream.send(resp).await.is_err() {
+                break;
+            }
+            */
         }
     }
+    info!(logger, "Closing WebSocket connection: {}", addr);
+}
+
+async fn server_loop(logger: Logger, addr: String, tasks: UnboundedSender<Task>) -> Result<(), std::io::Error> {
+    let addr = addr
+        .to_socket_addrs()
+        .await
+        .expect("Not a valid address")
+        .next()
+        .expect("Not a socket address");
+
+    // Create the event loop and TCP listener we'll accept connections on.
+    let try_socket = TcpListener::bind(&addr).await;
+    let listener = try_socket.expect("Failed to bind");
+    info!(logger, "Listening on: {}", addr);
+
+    while let Ok((stream, _)) = listener.accept().await {
+        task::spawn(accept_connection(logger.clone(), stream, tasks.clone()));
+    }
+
+    Ok(())
 }
 
 fn main() {
@@ -255,5 +171,22 @@ fn main() {
     let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root(drain, o!());
 
-    task::block_on(run(logger))
+    let (mut tasks_tx, tasks_rx) = futures::channel::mpsc::unbounded();
+
+    let local = env::args()
+        .nth(1)
+        .unwrap_or_else(|| panic!("this program requires at least two arguments"))
+        .to_string();
+
+    // Specify the server address to which the client will be connecting.
+    let remote = env::args()
+        .nth(2)
+        .unwrap_or_else(|| panic!("this program requires at least two argument"))
+        .to_string();
+
+    task::spawn(tick_loop(logger.clone(), local.clone(), tasks_rx));
+
+    task::spawn(server_loop(logger.clone(), local.to_string(), tasks_tx.clone()));
+
+    task::block_on(run(logger, local, remote, tasks_tx))
 }
