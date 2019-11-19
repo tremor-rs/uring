@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 #![recursion_limit = "512"]
 
 use async_std::prelude::*;
@@ -53,11 +54,6 @@ async fn run(logger: Logger) {
     dbg!(&connect_addr);
     let url = url::Url::parse(&connect_addr).unwrap();
 
-    // Spawn a new task that will will read data from stdin and then send it to the event loop over
-    // a standard futures channel.
-    let (stdin_tx, mut stdin_rx) = futures::channel::mpsc::channel(64);
-    task::spawn(read_stdin(stdin_tx));
-
     // After the TCP connection has been established, we set up our client to
     // start forwarding data.
     //
@@ -84,7 +80,7 @@ async fn run(logger: Logger) {
 
     let (mut tasks_tx, tasks_rx) = futures::channel::mpsc::unbounded();
 
-    task::spawn(tick_loop(
+    let tick_handle = task::spawn(tick_loop(
         logger.clone(),
         id.to_string(),
         vnodes.clone(),
@@ -110,7 +106,7 @@ async fn run(logger: Logger) {
             })
             .unwrap(),
         ))
-        .await;
+        .await.unwrap();
 
     ws_stream
         .send(Message::text(
@@ -120,14 +116,10 @@ async fn run(logger: Logger) {
             })
             .unwrap(),
         ))
-        .await;
+        .await.unwrap();
 
     loop {
         select! {
-            txt = stdin_rx.next().fuse() => match txt {
-                Some(line) => ws_stream.send(line).await.expect("failed to send"),
-                None => break,
-            },
             msg = ws_stream.next().fuse() => match msg {
                 Some(Ok(msg)) =>{
                     if msg.is_text() {
@@ -139,6 +131,8 @@ async fn run(logger: Logger) {
             },
         }
     }
+    drop(tasks_tx);
+    tick_handle.await
 }
 
 async fn tick_loop(
@@ -248,42 +242,10 @@ async fn handle_change(
             for (target, ids) in relocations.destinations.into_iter() {
                 for vnode in ids {
                     let target = target.clone();
-                    tasks.unbounded_send(Task::Relocate { target, vnode });
+                    tasks.unbounded_send(Task::Relocate { target, vnode }).unwrap();
                 }
             }
         }
-    }
-}
-
-async fn handle_tick(
-    logger: &Logger,
-    id: &str,
-    vnodes: &mut HashMap<u64, VNode>,
-    tasks: &mut VecDeque<Task>,
-) {
-    match tasks.pop_front() {
-        Some(Task::Relocate { target, vnode }) => {
-            let success = vnodes.remove(&vnode).is_some();
-            info!(
-                logger,
-                "relocating vnode {} to node {} => success: {}", vnode, target, success
-            );
-        }
-        None => (),
-    }
-}
-
-async fn read_stdin(mut tx: futures::channel::mpsc::Sender<Message>) {
-    let mut stdin = io::stdin();
-    loop {
-        let mut buf = vec![0; 1024];
-        let n = match stdin.read(&mut buf).await {
-            Err(_) | Ok(0) => break,
-            Ok(n) => n,
-        };
-        buf.truncate(n);
-        tx.try_send(Message::text(String::from_utf8(buf).unwrap()))
-            .unwrap();
     }
 }
 
