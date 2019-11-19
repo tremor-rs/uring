@@ -257,6 +257,18 @@ where
         eid: EventId,
         data: Vec<u8>,
     ) -> Result<()> {
+        self.pubsub
+            .send(pubsub::Msg::new(
+                "uring",
+                PSURing::ProposalReceived {
+                    from,
+                    pid,
+                    sid,
+                    eid,
+                    node: self.id,
+                },
+            ))
+            .unwrap();
         if self.is_leader() {
             self.proposals
                 .push_back(Proposal::normal(pid, from, sid, eid, data));
@@ -275,6 +287,15 @@ where
 
     pub fn add_node(&mut self, id: NodeId) -> bool {
         if self.is_leader() && !self.node_known(id) {
+            self.pubsub
+                .send(pubsub::Msg::new(
+                    "uring",
+                    PSURing::AddNode {
+                        new_node: id,
+                        node: self.id,
+                    },
+                ))
+                .unwrap();
             let mut conf_change = ConfChange::default();
             conf_change.node_id = id.0;
             conf_change.set_change_type(ConfChangeType::AddNode);

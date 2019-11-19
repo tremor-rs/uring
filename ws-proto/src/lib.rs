@@ -107,6 +107,17 @@ pub enum PSURing {
         prev_state: String,
         next_state: String,
     },
+    ProposalReceived {
+        node: NodeId,
+        from: NodeId,
+        pid: ProposalId,
+        sid: ServiceId,
+        eid: EventId,
+    },
+    AddNode {
+        node: NodeId,
+        new_node: NodeId,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
