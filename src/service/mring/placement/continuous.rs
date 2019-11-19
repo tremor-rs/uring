@@ -29,6 +29,12 @@ impl Placement for Strategy {
     }
     fn add_node(count: u64, mut current: MRingNodes, new: String) -> (MRingNodes, Relocations) {
         let mut rs = Relocations::new();
+        // skip nodes we know
+        for n in &current {
+            if n.id == new {
+                return (current, rs);
+            }
+        }
         let new_node = MRingNode {
             id: new,
             vnodes: Vec::new(),

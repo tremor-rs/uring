@@ -13,31 +13,46 @@
 // limitations under the License.
 #![recursion_limit = "512"]
 
-use async_std::io;
 use async_std::prelude::*;
-use async_std::task;
+use async_std::{io, stream, task};
 use async_tungstenite::connect_async;
 use futures::{select, FutureExt, StreamExt};
 use slog::{Drain, Logger};
+use std::collections::{HashMap, VecDeque};
 use std::env;
+use std::time::{Duration, Instant};
 use tungstenite::protocol::Message;
-use uring_common::{NodeId, RequestId};
-use ws_proto::{PSMRing, Protocol, ProtocolSelect, SubscriberMsg};
+use uring_common::{MRingNodes, NodeId, Relocations, RequestId};
+use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
 
 #[macro_use]
 extern crate slog;
 
+#[derive(Debug, Clone)]
+struct VNode {
+    id: u64,
+    history: Vec<String>,
+}
+
+enum Task {
+    Relocate { target: String, vnode: u64 },
+}
+
 async fn run(logger: Logger) {
+    let id = env::args()
+        .nth(1)
+        .unwrap_or_else(|| panic!("this program requires at least two arguments"));
     // Specify the server address to which the client will be connecting.
     let connect_addr = env::args()
-        .nth(1)
-        .unwrap_or_else(|| panic!("this program requires at least one argument"));
+        .nth(2)
+        .unwrap_or_else(|| panic!("this program requires at least two argument"));
 
+    dbg!(&connect_addr);
     let url = url::Url::parse(&connect_addr).unwrap();
 
     // Spawn a new task that will will read data from stdin and then send it to the event loop over
     // a standard futures channel.
-    let (stdin_tx, mut stdin_rx) = futures::channel::mpsc::unbounded();
+    let (stdin_tx, mut stdin_rx) = futures::channel::mpsc::channel(64);
     task::spawn(read_stdin(stdin_tx));
 
     // After the TCP connection has been established, we set up our client to
@@ -62,12 +77,36 @@ async fn run(logger: Logger) {
         "WebSocket handshake has been successfully completed"
     );
 
+    let mut ticks = async_std::stream::interval(Duration::from_secs(1));
+    let mut vnodes: HashMap<u64, VNode> = HashMap::new();
+    let mut tasks: VecDeque<Task> = VecDeque::new();
+
     // subscribe to uring messages
     //
     ws_stream
         .send(Message::text(
             serde_json::to_string(&ProtocolSelect::Subscribe {
                 channel: "mring".into(),
+            })
+            .unwrap(),
+        ))
+        .await;
+
+    ws_stream
+        .send(Message::text(
+            serde_json::to_string(&ProtocolSelect::Select {
+                protocol: Protocol::MRing,
+                rid: RequestId(1),
+            })
+            .unwrap(),
+        ))
+        .await;
+
+    ws_stream
+        .send(Message::text(
+            serde_json::to_string(&MRRequest::AddNode {
+                node: id.to_string(),
+                rid: RequestId(2),
             })
             .unwrap(),
         ))
@@ -82,17 +121,24 @@ async fn run(logger: Logger) {
             msg = ws_stream.next().fuse() => match msg {
                 Some(Ok(msg)) =>{
                     if msg.is_text() {
-                        handle_msg(&logger, msg.into_data()).await;
+                        handle_msg(&logger, &id, &mut vnodes, &mut tasks, msg.into_data()).await;
                     }
                 },
                 Some(Err(_e)) => break,
                 None => break,
-            }
+            },
+            tick = ticks.next().fuse() => handle_tick(&logger, &id, &mut vnodes, &mut tasks).await
         }
     }
 }
 
-async fn handle_msg(logger: &Logger, msg: Vec<u8>) {
+async fn handle_msg(
+    logger: &Logger,
+    id: &str,
+    vnodes: &mut HashMap<u64, VNode>,
+    tasks: &mut VecDeque<Task>,
+    msg: Vec<u8>,
+) {
     match serde_json::from_slice(&msg) {
         Ok(SubscriberMsg::Msg { channel, msg }) => match serde_json::from_value(msg) {
             Ok(PSMRing::SetSize { size, .. }) => info!(logger, "Size set to {}", size),
@@ -101,31 +147,92 @@ async fn handle_msg(logger: &Logger, msg: Vec<u8>) {
                 next,
                 relocations,
                 ..
-            }) => info!(
-                logger,
-                "Node '{}' added: {:?}, next state: {:?}", node, relocations, next
-            ),
+            }) => {
+                info!(logger, "Node '{}' added", node);
+                handle_change(logger, &id, vnodes, tasks, relocations, next);
+            }
             Ok(PSMRing::NodeRemoved {
                 node,
                 next,
                 relocations,
                 ..
-            }) => info!(
-                logger,
-                "Node '{}' removed: {:?}, next state: {:?}", node, relocations, next
-            ),
+            }) => {
+                info!(logger, "Node '{}' removed", node,);
+                handle_change(logger, &id, vnodes, tasks, relocations, next);
+            }
             Err(e) => error!(logger, "failed to decode: {}", e),
         },
-        Err(e) => error!(
-            logger,
-            "failed to decode: {} for '{:?}'",
-            e,
-            String::from_utf8(msg)
-        ),
+        Err(e) => {
+            if serde_json::from_slice::<Reply>(&msg).is_err()
+                && serde_json::from_slice::<ProtocolSelect>(&msg).is_err()
+            {
+                error!(
+                    logger,
+                    "failed to decode: {} for '{:?}'",
+                    e,
+                    String::from_utf8(msg)
+                )
+            }
+        }
     }
 }
 
-async fn read_stdin(tx: futures::channel::mpsc::UnboundedSender<Message>) {
+fn handle_change(
+    logger: &Logger,
+    id: &str,
+    vnodes: &mut HashMap<u64, VNode>,
+    tasks: &mut VecDeque<Task>,
+    mut relocations: Relocations,
+    next: MRingNodes,
+) {
+    // This is an initial assignment
+    if relocations.is_empty() {
+        if let Some(vnode) = next.into_iter().filter(|v| v.id == id).next() {
+            if vnodes.is_empty() {
+                info!(logger, "Initializing with {:?}", vnode.vnodes);
+                let my_id = id;
+                for id in vnode.vnodes {
+                    vnodes.insert(
+                        id,
+                        VNode {
+                            id,
+                            history: vec![my_id.to_string()],
+                        },
+                    );
+                }
+            }
+        }
+    } else {
+        if let Some(relocations) = relocations.remove(id) {
+            for (target, ids) in relocations.destinations.into_iter() {
+                for vnode in ids {
+                    let target = target.clone();
+                    tasks.push_back(Task::Relocate { target, vnode })
+                }
+            }
+        }
+    }
+}
+
+async fn handle_tick(
+    logger: &Logger,
+    id: &str,
+    vnodes: &mut HashMap<u64, VNode>,
+    tasks: &mut VecDeque<Task>,
+) {
+    match tasks.pop_front() {
+        Some(Task::Relocate { target, vnode }) => {
+            let success = vnodes.remove(&vnode).is_some();
+            info!(
+                logger,
+                "relocating vnode {} to node {} => success: {}", vnode, target, success
+            );
+        }
+        None => (),
+    }
+}
+
+async fn read_stdin(mut tx: futures::channel::mpsc::Sender<Message>) {
     let mut stdin = io::stdin();
     loop {
         let mut buf = vec![0; 1024];
@@ -134,7 +241,7 @@ async fn read_stdin(tx: futures::channel::mpsc::UnboundedSender<Message>) {
             Ok(n) => n,
         };
         buf.truncate(n);
-        tx.unbounded_send(Message::text(String::from_utf8(buf).unwrap()))
+        tx.try_send(Message::text(String::from_utf8(buf).unwrap()))
             .unwrap();
     }
 }

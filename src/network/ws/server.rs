@@ -64,8 +64,8 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for Connection {
     }
 }
 
-impl StreamHandler<pubsub::SubscriberMsg, pubsub::Error> for Connection {
-    fn handle(&mut self, msg: pubsub::SubscriberMsg, ctx: &mut Self::Context) {
+impl StreamHandler<SubscriberMsg, pubsub::Error> for Connection {
+    fn handle(&mut self, msg: SubscriberMsg, ctx: &mut Self::Context) {
         ctx.text(serde_json::to_string(&msg).unwrap());
     }
 }

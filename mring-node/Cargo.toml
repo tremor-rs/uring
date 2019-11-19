@@ -13,7 +13,7 @@ uring-common = { path = "../uring-common" }
 slog = { version = "2", features = ["max_level_info", "release_max_level_warn"] }
 
 async-tungstenite= {git="https://github.com/sdroege/async-tungstenite"}
-async-std = "*"
+async-std = {version="*", features = ["unstable"]}
 async-tls = "*"
 futures = "0.3"
 url = "*"
