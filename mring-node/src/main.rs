@@ -14,15 +14,18 @@
 #![recursion_limit = "512"]
 
 use async_std::prelude::*;
-use async_std::{io, stream, task};
+use async_std::sync::{Arc, RwLock};
+use async_std::{io, task};
 use async_tungstenite::connect_async;
+use futures::stream::Stream;
+use futures::task::Poll;
 use futures::{select, FutureExt, StreamExt};
 use slog::{Drain, Logger};
 use std::collections::{HashMap, VecDeque};
 use std::env;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tungstenite::protocol::Message;
-use uring_common::{MRingNodes, NodeId, Relocations, RequestId};
+use uring_common::{MRingNodes, Relocations, RequestId};
 use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
 
 #[macro_use]
@@ -77,9 +80,16 @@ async fn run(logger: Logger) {
         "WebSocket handshake has been successfully completed"
     );
 
-    let mut ticks = async_std::stream::interval(Duration::from_secs(1));
-    let mut vnodes: HashMap<u64, VNode> = HashMap::new();
-    let mut tasks: VecDeque<Task> = VecDeque::new();
+    let vnodes: Arc<RwLock<HashMap<u64, VNode>>> = Arc::new(RwLock::new(HashMap::new()));
+
+    let (mut tasks_tx, tasks_rx) = futures::channel::mpsc::unbounded();
+
+    task::spawn(tick_loop(
+        logger.clone(),
+        id.to_string(),
+        vnodes.clone(),
+        tasks_rx,
+    ));
 
     // subscribe to uring messages
     //
@@ -121,13 +131,39 @@ async fn run(logger: Logger) {
             msg = ws_stream.next().fuse() => match msg {
                 Some(Ok(msg)) =>{
                     if msg.is_text() {
-                        handle_msg(&logger, &id, &mut vnodes, &mut tasks, msg.into_data()).await;
+                        handle_msg(&logger, &id, & vnodes, &mut tasks_tx, msg.into_data()).await;
                     }
                 },
                 Some(Err(_e)) => break,
                 None => break,
             },
-            tick = ticks.next().fuse() => handle_tick(&logger, &id, &mut vnodes, &mut tasks).await
+        }
+    }
+}
+
+async fn tick_loop(
+    logger: Logger,
+    id: String,
+    vnodes: Arc<RwLock<HashMap<u64, VNode>>>,
+    mut tasks: futures::channel::mpsc::UnboundedReceiver<Task>,
+) {
+    let mut ticks = async_std::stream::interval(Duration::from_secs(1));
+    while ticks.next().await.is_some() {
+        select! {
+            task = tasks.next() =>
+            match task {
+                Some(Task::Relocate { target, vnode }) => {
+                    let mut vnodes = vnodes.write().await;
+                    let success = vnodes.remove(&vnode).is_some();
+                    info!(
+                        logger,
+                        "relocating vnode {} to node {} => success: {}", vnode, target, success
+                    );
+                },
+                None => break,
+            },
+            complete => break,
+            default => ()
         }
     }
 }
@@ -135,8 +171,8 @@ async fn run(logger: Logger) {
 async fn handle_msg(
     logger: &Logger,
     id: &str,
-    vnodes: &mut HashMap<u64, VNode>,
-    tasks: &mut VecDeque<Task>,
+    vnodes: &Arc<RwLock<HashMap<u64, VNode>>>,
+    tasks: &mut futures::channel::mpsc::UnboundedSender<Task>,
     msg: Vec<u8>,
 ) {
     match serde_json::from_slice(&msg) {
@@ -149,7 +185,7 @@ async fn handle_msg(
                 ..
             }) => {
                 info!(logger, "Node '{}' added", node);
-                handle_change(logger, &id, vnodes, tasks, relocations, next);
+                handle_change(logger, &id, vnodes, tasks, relocations, next).await;
             }
             Ok(PSMRing::NodeRemoved {
                 node,
@@ -158,7 +194,7 @@ async fn handle_msg(
                 ..
             }) => {
                 info!(logger, "Node '{}' removed", node,);
-                handle_change(logger, &id, vnodes, tasks, relocations, next);
+                handle_change(logger, &id, vnodes, tasks, relocations, next).await;
             }
             Err(e) => error!(logger, "failed to decode: {}", e),
         },
@@ -177,20 +213,25 @@ async fn handle_msg(
     }
 }
 
-fn handle_change(
+async fn handle_change(
     logger: &Logger,
     id: &str,
-    vnodes: &mut HashMap<u64, VNode>,
-    tasks: &mut VecDeque<Task>,
+    vnodes: &Arc<RwLock<HashMap<u64, VNode>>>,
+    tasks: &mut futures::channel::mpsc::UnboundedSender<Task>,
     mut relocations: Relocations,
     next: MRingNodes,
 ) {
     // This is an initial assignment
     if relocations.is_empty() {
         if let Some(vnode) = next.into_iter().filter(|v| v.id == id).next() {
-            if vnodes.is_empty() {
+            let is_empty = {
+                let vnodes = vnodes.read().await;
+                vnodes.is_empty()
+            };
+            if is_empty {
                 info!(logger, "Initializing with {:?}", vnode.vnodes);
                 let my_id = id;
+                let mut vnodes = vnodes.write().await;
                 for id in vnode.vnodes {
                     vnodes.insert(
                         id,
@@ -207,7 +248,7 @@ fn handle_change(
             for (target, ids) in relocations.destinations.into_iter() {
                 for vnode in ids {
                     let target = target.clone();
-                    tasks.push_back(Task::Relocate { target, vnode })
+                    tasks.unbounded_send(Task::Relocate { target, vnode });
                 }
             }
         }
