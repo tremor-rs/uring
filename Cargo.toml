@@ -24,6 +24,7 @@ raft = "0.6.0-alpha"
 rocksdb = "0.12"
 #slog = "2"
 slog = { version = "2", features = ["max_level_info", "release_max_level_warn"] }
+slog-json = "2"
 
 slog-term = "*"
 slog-async = "*"

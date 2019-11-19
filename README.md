@@ -36,6 +36,12 @@ For dependencies ( if needed )
 pip3 install -r ./requirements.txt
 ```
 
+To output formatted pretty-printed json logs:
+
+```bash
+$ PYTHONPATH=. ./bin/3u.py 2>&1 | jq -R 'fromjson?'
+```
+
 ## Acceptance tests
 
 ```bash
@@ -114,4 +120,27 @@ websocat ws://localhost:8081/uring
 
 {"Subscribe": {"channel": "kv"}}
 {"Subscribe": {"channel": "mring"}}
+```
+
+## python client example
+
+```python
+#!/usr/bin/env python3
+import contrib
+import time
+
+rc = contrib.RaftClient()
+rc.set_host('127.0.0.1')
+rc.set_port(8081)
+rc.ws_start()
+
+def report(subject,json):
+    print("{} Event: {}".format(subject, json))
+
+time.sleep(1)
+rc.subscribe('kv', lambda json: report('KV', json))
+rc.subscribe('mring', lambda json: report('MRing', json))
+
+while True:
+    time.sleep(1)
 ```

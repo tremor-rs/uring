@@ -119,7 +119,42 @@ class UringServer():
     def die(self):
         self.cmd.kill()
 
-class RaftClient():
+def synchronized(method):
+    def f(*args):
+        self = args[0]
+        self.mutex.acquire();
+        try:
+            return apply(method, args)
+        finally:
+            self.mutex.release();
+        return f
+
+def synchronize(kclazz, names=None):
+    if type(names)==type(''):
+        names = names.split()
+    for (name, method_handle) in klazz.__dict.items():
+        if callable(name) and name != '__init__' and (names == None or name in names):
+            klazz.__dict__[name] = synchronized(method_handle)
+
+class Synchronizer:
+    def __init__(self):
+        self.mutex = threading.RLock()
+
+class ChannelObserver(Synchronizer):
+    def __init__(self):
+        self.obs = {}
+        Synchronizer.__init__(self)
+        return self
+
+    def watch(self, channel, handler):
+        if channel in self.obs:
+            self.obs[channel].append(handler)
+        else:
+            self.obs[channel] = [handler]
+    
+
+
+class RaftClient(ChannelObserver):
     """Handles client interactions to raft node."""
 
     def __init__(self):
@@ -131,10 +166,14 @@ class RaftClient():
         self.callbacks = {}
         self.ws = None
         self.wsc_thread = None
+        self.hub = ChannelObserver.__init__(self)
         self.rid = 0
 
     def on_message(self, message):
-        print(message)
+        as_json = simplejson.loads(message)
+        if 'channel' in as_json['Msg']:
+            for handlers in self.hub.obs[as_json['Msg']['channel']]:
+                handlers(as_json)
         return message
 
     def on_error(self, error):
@@ -146,7 +185,7 @@ class RaftClient():
 
     def ws_start(self):
         self.ws = websocket.WebSocketApp(
-            "ws://127.0.0.1:{}/uring".format(self.port),
+            "ws://{}:{}/uring".format(self.host, self.port),
             on_open=self.on_open,
             on_message=self.on_message,
             on_error=self.on_error,
@@ -172,7 +211,10 @@ class RaftClient():
             }
         ))
 
-    def subscribe(self, channel):
+    def subscribe(self, channel, handler=None):
+        if not handler is None:
+            self.hub.watch(channel, handler)
+
         self.ws.send(simplejson.dumps({
             "Subscribe": {
                 "channel": channel
@@ -245,7 +287,8 @@ class RaftClient():
         self.rid = self.rid + 1
 
     def on_open(self):
-        print("WS Open")
+        # FIXME TODO call virtual ws.open channel ...
+        True
 
     def set_node_id(self, id):
         self.node_id = id

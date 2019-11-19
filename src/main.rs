@@ -29,6 +29,7 @@ use crate::storage::URRocksStorage;
 use clap::{App as ClApp, Arg};
 use serde::{Deserialize, Serialize};
 use slog::{Drain, Logger};
+use slog_json;
 use std::thread;
 use std::time::{Duration, Instant};
 pub use uring_common::*;
@@ -100,8 +101,9 @@ fn raft_loop<N: Network>(
 }
 
 fn main() -> std::io::Result<()> {
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_json::Json::default(std::io::stderr()).map(slog::Fuse);
+    // let decorator = slog_term::TermDecorator::new().build();
+    // let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root(drain, o!());
 
