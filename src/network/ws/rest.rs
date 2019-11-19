@@ -222,10 +222,11 @@ pub(crate) fn get_mring_size(
         .tx
         .send(UrMsg::MRingGetSize(Reply::Direct(tx)))
         .unwrap();
-    if let Some(size) = rx.recv().unwrap().and_then(|data| {
-        let mut rdr = Cursor::new(data);
-        rdr.read_u64::<BigEndian>().ok()
-    }) {
+    if let Some(size) = rx
+        .recv()
+        .unwrap()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+    {
         Ok(HttpResponse::Ok().json(MRingSize { size }))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
@@ -242,10 +243,11 @@ pub(crate) fn set_mring_size(
         .tx
         .send(UrMsg::MRingSetSize(body.size, Reply::Direct(tx)))
         .unwrap();
-    if let Some(size) = rx.recv().unwrap().and_then(|data| {
-        let mut rdr = Cursor::new(data);
-        rdr.read_u64::<BigEndian>().ok()
-    }) {
+    if let Some(size) = rx
+        .recv()
+        .unwrap()
+        .and_then(|data| serde_json::from_slice(dbg!(&data)).ok())
+    {
         Ok(HttpResponse::Ok().json(MRingSize { size }))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))

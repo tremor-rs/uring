@@ -111,8 +111,8 @@ where
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
         match serde_json::from_slice(&event) {
-            Ok(Event::GetSize) => Ok(storage
-                .get(MRING_SERVICE.0 as u16, RING_SIZE)
+            Ok(Event::GetSize) => Ok(self
+                .size(storage)
                 .and_then(|size| serde_json::to_vec(&serde_json::Value::from(size)).ok())),
             Ok(Event::SetSize { size }) => {
                 let size = if let Some(size) = self.size(storage) {

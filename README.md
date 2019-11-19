@@ -39,7 +39,7 @@ pip3 install -r ./requirements.txt
 To output formatted pretty-printed json logs:
 
 ```bash
-$ PYTHONPATH=. ./bin/3u.py 2>&1 | jq -R 'fromjson?'
+PYTHONPATH=. ./bin/3u.py 2>&1 | jq -R 'fromjson?'
 ```
 
 ## Acceptance tests
@@ -108,9 +108,12 @@ websocat ws://localhost:8081/uring
 
 {"GetSize": {"rid": 2}}
 
-{"AddNode": {"rid": 3, "node": "n1"}}
-{"AddNode": {"rid": 3, "node": "n2"}}
-{"AddNode": {"rid": 3, "node": "n3"}}
+{"AddNode": {"rid": 3, "node": "127.0.0.1:8181"}}
+{"AddNode": {"rid": 3, "node": "127.0.0.1:8182"}}
+{"AddNode": {"rid": 3, "node": "127.0.0.1:8183"}}
+
+{"RemoveNode": {"rid": 3, "node": "127.0.0.1:8182"}}
+
 ```
 
 ## ws - pubsub

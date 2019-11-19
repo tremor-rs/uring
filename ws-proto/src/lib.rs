@@ -101,6 +101,15 @@ pub enum PSMRing {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum PSURing {
+    StateChange {
+        node: NodeId,
+        prev_state: String,
+        next_state: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SubscriberMsg {
     Msg {
         channel: String,

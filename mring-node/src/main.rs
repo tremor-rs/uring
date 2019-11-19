@@ -87,7 +87,7 @@ async fn handle_connection(logger: Logger, connection: Connection) {
     }
 }
 
-async fn accept_connection(logger: Logger, stream: TcpStream, mut tasks: UnboundedSender<Task>) {
+async fn accept_connection(logger: Logger, stream: TcpStream, tasks: UnboundedSender<Task>) {
     let addr = stream
         .peer_addr()
         .expect("connected streams should have a peer address");
@@ -125,8 +125,8 @@ async fn accept_connection(logger: Logger, stream: TcpStream, mut tasks: Unbound
                 Ok(Migration::Data { data, id }) => {
                     if let Some(vnode) = vnode_id {
                         tasks
-                        .unbounded_send(Task::MigrateIn { data, vnode })
-                        .unwrap();
+                            .unbounded_send(Task::MigrateIn { data, vnode })
+                            .unwrap();
                     }
                 }
                 Ok(Migration::Finish { id }) => {
@@ -145,7 +145,11 @@ async fn accept_connection(logger: Logger, stream: TcpStream, mut tasks: Unbound
     info!(logger, "Closing WebSocket connection: {}", addr);
 }
 
-async fn server_loop(logger: Logger, addr: String, tasks: UnboundedSender<Task>) -> Result<(), std::io::Error> {
+async fn server_loop(
+    logger: Logger,
+    addr: String,
+    tasks: UnboundedSender<Task>,
+) -> Result<(), std::io::Error> {
     let addr = addr
         .to_socket_addrs()
         .await
@@ -171,7 +175,7 @@ fn main() {
     let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root(drain, o!());
 
-    let (mut tasks_tx, tasks_rx) = futures::channel::mpsc::unbounded();
+    let (tasks_tx, tasks_rx) = futures::channel::mpsc::unbounded();
 
     let local = env::args()
         .nth(1)
@@ -186,7 +190,11 @@ fn main() {
 
     task::spawn(tick_loop(logger.clone(), local.clone(), tasks_rx));
 
-    task::spawn(server_loop(logger.clone(), local.to_string(), tasks_tx.clone()));
+    task::spawn(server_loop(
+        logger.clone(),
+        local.to_string(),
+        tasks_tx.clone(),
+    ));
 
     task::block_on(run(logger, local, remote, tasks_tx))
 }

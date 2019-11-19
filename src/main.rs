@@ -33,6 +33,7 @@ use slog_json;
 use std::thread;
 use std::time::{Duration, Instant};
 pub use uring_common::*;
+use ws_proto::PSURing;
 
 #[macro_use]
 extern crate slog;
@@ -78,21 +79,13 @@ fn raft_loop<N: Network>(
     let vnode: MRingService<service::mring::placement::continuous::Strategy> = MRingService::new();
     node.add_service(MRING_SERVICE, Box::new(vnode));
 
-    let mut last_state = node.role().clone();
     loop {
         thread::sleep(Duration::from_millis(10));
-
-        let this_state = node.role();
 
         if t1.elapsed() >= Duration::from_secs(10) {
             // Tick the raft.
             node.log();
             t1 = Instant::now();
-        }
-
-        if this_state != &last_state {
-            debug!(&logger, "State transition"; "last-state" => format!("{:?}", last_state), "next-state" => format!("{:?}", this_state));
-            last_state = this_state.clone()
         }
 
         // Handle readies from the raft.

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub mod continuous;
-use uring_common::{MRingNode, MRingNodes, Relocations};
+use uring_common::{MRingNodes, Relocations};
 
 pub trait Placement {
     fn add_node(count: u64, current: MRingNodes, new: String) -> (MRingNodes, Relocations);

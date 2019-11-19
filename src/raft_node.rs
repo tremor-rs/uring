@@ -72,6 +72,7 @@ where
     tick_duration: Duration,
     services: HashMap<ServiceId, Box<dyn Service<Storage>>>,
     pubsub: pubsub::Channel,
+    last_state: StateRole,
 }
 
 impl<Storage, Network> fmt::Debug for RaftNode<Storage, Network>
@@ -213,6 +214,27 @@ where
         }
         if !self.is_running() {
             return Ok(());
+        }
+
+        let this_state = self.role();
+
+        if this_state != &self.last_state {
+            let prev_state = format!("{:?}", self.last_state);
+            let next_state = format!("{:?}", this_state);
+            debug!(&self.logger, "State transition"; "last-state" => prev_state.clone(), "next-state" => next_state.clone());
+            let msg = serde_json::to_value(&PSURing::StateChange {
+                prev_state,
+                next_state,
+                node: self.id,
+            })
+            .unwrap();
+            self.pubsub
+                .send(pubsub::Msg::Msg {
+                    channel: "uring".into(),
+                    msg: msg,
+                })
+                .unwrap();
+            self.last_state = this_state.clone();
         }
 
         if self.timer.elapsed() >= self.tick_duration {
@@ -379,6 +401,7 @@ where
             tick_duration: Duration::from_millis(100),
             services: HashMap::new(),
             pubsub,
+            last_state: StateRole::PreCandidate,
         }
     }
 
@@ -413,6 +436,7 @@ where
             tick_duration: Duration::from_millis(100),
             services: HashMap::new(),
             pubsub,
+            last_state: StateRole::PreCandidate,
         }
     }
 
