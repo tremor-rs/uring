@@ -265,7 +265,7 @@ pub(crate) fn get_mring_nodes(
         .unwrap();
     if let Some(data) = rx.recv().unwrap() {
         Ok(HttpResponse::Ok()
-            .content_type("applicaiton/json")
+            .content_type("application/json")
             .body(data))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
@@ -289,7 +289,7 @@ pub(crate) fn add_mring_node(
         .unwrap();
     if let Some(data) = rx.recv().unwrap() {
         Ok(HttpResponse::Ok()
-            .content_type("applicaiton/json")
+            .content_type("application/json")
             .body(data))
     } else {
         Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))

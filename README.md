@@ -60,11 +60,11 @@ open http://localhost:8000/coyote.html
 ## vnode
 
 ```bash
-curl -H 'Content-Type: applicaiton/json' -X GET http://localhost:8081/mring
-curl -H 'Content-Type: applicaiton/json' -X POST -d '{"size":64}' http://localhost:8081/mring
-curl -H 'Content-Type: applicaiton/json' -X POST -d '{"node":"n1"}' http://localhost:8081/mring/node
-curl -H 'Content-Type: applicaiton/json' -X GET http://localhost:8081/mring/node
-curl -H 'Content-Type: applicaiton/json' -X POST -d '{"node":"n2"}' http://localhost:8081/mring/node
+curl -H 'Content-Type: application/json' -X GET http://localhost:8081/mring
+curl -H 'Content-Type: application/json' -X POST -d '{"size":64}' http://localhost:8081/mring
+curl -H 'Content-Type: application/json' -X POST -d '{"node":"n1"}' http://localhost:8081/mring/node
+curl -H 'Content-Type: application/json' -X GET http://localhost:8081/mring/node
+curl -H 'Content-Type: application/json' -X POST -d '{"node":"n2"}' http://localhost:8081/mring/node
 ```
 
 ## ws - kv

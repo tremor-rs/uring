@@ -1,18 +1,20 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 -u
+import sys
 import contrib
 import time
+import simplejson
 
 rc = contrib.RaftClient()
 rc.set_host('127.0.0.1')
 rc.set_port(8081)
 rc.ws_start()
 
-def report(subject,json):
-    print("{} Event: {}".format(subject, json))
+def report(_subject,json):
+    print("{}\n".format(simplejson.dumps(json)))
 
 time.sleep(1)
 rc.subscribe('kv', lambda json: report('KV', json))
 rc.subscribe('mring', lambda json: report('MRing', json))
 
-while True:
-    time.sleep(1)
+for line in sys.stdin.readline():
+   rc.ws_stop()
