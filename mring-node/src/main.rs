@@ -28,11 +28,12 @@ use std::time::Duration;
 use tungstenite::protocol::Message;
 use uring_common::{MRingNodes, Relocations, RequestId};
 use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
+use serde::{Serialize, Deserialize};
 
 #[macro_use]
 extern crate slog;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct VNode {
     id: u64,
     history: Vec<String>,
@@ -69,7 +70,6 @@ async fn run(logger: Logger) {
     // Finally we set the client to terminate once either half of this work
     // finishes. If we don't have any more data to read or we won't receive any
     // more work from the remote then we can exit.
-    let mut stdout = io::stdout();
     let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     info!(
         logger,
@@ -96,7 +96,7 @@ async fn run(logger: Logger) {
             })
             .unwrap(),
         ))
-        .await;
+        .await.unwrap();
 
     ws_stream
         .send(Message::text(
@@ -137,7 +137,7 @@ async fn run(logger: Logger) {
 
 async fn tick_loop(
     logger: Logger,
-    id: String,
+    _id: String,
     vnodes: Arc<RwLock<HashMap<u64, VNode>>>,
     mut tasks: futures::channel::mpsc::UnboundedReceiver<Task>,
 ) {
@@ -170,7 +170,7 @@ async fn handle_msg(
     msg: Vec<u8>,
 ) {
     match serde_json::from_slice(&msg) {
-        Ok(SubscriberMsg::Msg { channel, msg }) => match serde_json::from_value(msg) {
+        Ok(SubscriberMsg::Msg {  msg,.. }) => match serde_json::from_value(msg) {
             Ok(PSMRing::SetSize { size, .. }) => info!(logger, "Size set to {}", size),
             Ok(PSMRing::NodeAdded {
                 node,
