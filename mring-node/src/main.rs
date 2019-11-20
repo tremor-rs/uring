@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![recursion_limit = "512"]
+#![recursion_limit = "2048"]
 
 mod mring_listener;
 mod vnode_manager;
@@ -21,10 +21,10 @@ use vnode_manager::*;
 
 use async_std::net::{SocketAddr, ToSocketAddrs};
 use async_std::net::{TcpListener, TcpStream};
-use async_std::{ task};
+use async_std::task;
 use async_tungstenite::connect_async;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures::{ StreamExt};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use slog::{Drain, Logger};
 use std::env;
@@ -48,7 +48,7 @@ struct Migration {
 struct VNode {
     id: u64,
     migration: Option<Migration>,
-    history: Vec<String>,
+    data: Vec<String>,
 }
 
 enum Task {
@@ -65,7 +65,7 @@ enum Task {
     },
     MigrateIn {
         vnode: u64,
-        id: u64,
+        chunk: u64,
         data: Vec<String>,
     },
     MigrateInEnd {
@@ -77,9 +77,11 @@ struct Connection {
     addr: SocketAddr,
     rx: UnboundedReceiver<Message>,
     tx: UnboundedSender<Message>,
+    tasks: UnboundedSender<Task>,
+    vnode: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 enum MigrationMsg {
     Start {
         src: String,
@@ -87,7 +89,7 @@ enum MigrationMsg {
     },
     Data {
         vnode: u64,
-        id: u64,
+        chunk: u64,
         data: Vec<String>,
     },
     Finish {
@@ -95,24 +97,69 @@ enum MigrationMsg {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 enum MigrationAck {
     Start { vnode: u64 },
-    Data { id: u64 },
+    Data { chunk: u64 },
     Finish { vnode: u64 },
 }
 
-async fn handle_connection(logger: Logger, connection: Connection) {
-    let mut connection = connection;
+async fn handle_connection(logger: Logger, mut connection: Connection) {
     while let Some(msg) = connection.rx.next().await {
         info!(
             logger,
             "Received a message from {}: {}", connection.addr, msg
         );
-        connection
-            .tx
-            .unbounded_send(msg)
-            .expect("Failed to forward message");
+        match serde_json::from_slice(&msg.into_data()) {
+            Ok(MigrationMsg::Start { src, vnode }) => {
+                assert!(connection.vnode.is_none());
+                connection.vnode = Some(vnode);
+                connection
+                    .tasks
+                    .unbounded_send(Task::MigrateInStart { src, vnode })
+                    .unwrap();
+                info!(logger, "migration for node {} started", vnode);
+                connection
+                    .tx
+                    .unbounded_send(Message::text(
+                        serde_json::to_string(&MigrationAck::Start { vnode }).unwrap(),
+                    ))
+                    .expect("Failed to forward message");
+            }
+            Ok(MigrationMsg::Data { vnode, data, chunk }) => {
+                if let Some(vnode_current) = connection.vnode {
+                    assert_eq!(vnode, vnode_current);
+                    connection
+                        .tasks
+                        .unbounded_send(Task::MigrateIn { data, vnode, chunk })
+                        .unwrap();
+                    connection
+                        .tx
+                        .unbounded_send(Message::text(
+                            serde_json::to_string(&MigrationAck::Data { chunk }).unwrap(),
+                        ))
+                        .expect("Failed to forward message");
+                }
+            }
+            Ok(MigrationMsg::Finish { vnode }) => {
+                if let Some(node_id) = connection.vnode {
+                    assert_eq!(node_id, vnode);
+                    connection
+                        .tasks
+                        .unbounded_send(Task::MigrateInEnd { vnode })
+                        .unwrap();
+                    connection
+                        .tx
+                        .unbounded_send(Message::text(
+                            serde_json::to_string(&MigrationAck::Finish { vnode }).unwrap(),
+                        ))
+                        .expect("Failed to forward message");
+                }
+                connection.vnode = None;
+                info!(logger, "migration for node {} finished", vnode);
+            }
+            Err(e) => error!(logger, "failed to decode: {}", e),
+        }
     }
 }
 
@@ -137,46 +184,19 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: UnboundedSe
         addr: addr,
         rx: msg_rx,
         tx: response_tx,
+        vnode: None,
+        tasks,
     };
     task::spawn(handle_connection(logger.clone(), c));
 
-    let mut vnode_id = None;
     while let Some(Ok(message)) = ws_stream.next().await {
         msg_tx
             .unbounded_send(message)
             .expect("Failed to forward request");
-        if let Some(msg) = response_rx.next().await {
-            match serde_json::from_slice(&msg.into_data()) {
-                Ok(MigrationMsg::Start { src, vnode }) => {
-                    assert!(vnode_id.is_none());
-                    vnode_id = Some(vnode);
-                    tasks
-                        .unbounded_send(Task::MigrateInStart { src, vnode })
-                        .unwrap();
-                    info!(logger, "migration for node {} started", vnode);
-                }
-                Ok(MigrationMsg::Data { vnode, data, id }) => {
-                    if let Some(vnode) = vnode_id {
-                        tasks
-                            .unbounded_send(Task::MigrateIn { data, vnode, id })
-                            .unwrap();
-                    }
-                }
-                Ok(MigrationMsg::Finish { vnode }) => {
-                    if let Some(node_id) = vnode_id {
-                        assert_eq!(node_id, vnode);
-                        tasks.unbounded_send(Task::MigrateInEnd { vnode }).unwrap();
-                    }
-                    vnode_id = None;
-                    info!(logger, "migration for node {} finished", vnode);
-                }
-                Err(e) => error!(logger, "failed to decode: {}", e),
-            }
-            /*
+        if let Some(resp) = response_rx.next().await {
             if ws_stream.send(resp).await.is_err() {
                 break;
             }
-            */
         }
     }
     info!(logger, "Closing WebSocket connection: {}", addr);

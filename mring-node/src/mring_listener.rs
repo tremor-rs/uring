@@ -14,7 +14,7 @@
 
 use super::*;
 use async_tungstenite::connect_async;
-use futures::channel::mpsc::{ UnboundedSender};
+use futures::channel::mpsc::UnboundedSender;
 use futures::{select, FutureExt, StreamExt};
 use slog::Logger;
 use tungstenite::protocol::Message;
