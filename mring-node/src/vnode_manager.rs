@@ -13,32 +13,31 @@
 // limitations under the License.
 
 use super::*;
-use async_std::sync::{Arc, RwLock};
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures::stream::Stream;
-use futures::task::Poll;
+use futures::channel::mpsc::{UnboundedReceiver};
 use futures::{select, StreamExt};
 use slog::Logger;
 use std::collections::HashMap;
-use std::env;
 use std::time::Duration;
 use tungstenite::protocol::Message;
-use uring_common::{MRingNodes, Relocations, RequestId};
-use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
 
 async fn do_migrate(logger: Logger, target: String, vnode: VNode) {
     let url = url::Url::parse(&format!("ws://{}", target)).unwrap();
     let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     ws_stream
         .send(Message::text(
-            serde_json::to_string(&Migration::Start { id: vnode.id }).unwrap(),
+            serde_json::to_string(&MigrationMsg::Start {
+                src: "".into(),
+                vnode: vnode.id,
+            })
+            .unwrap(),
         ))
         .await
         .unwrap();
 
     ws_stream
         .send(Message::text(
-            serde_json::to_string(&Migration::Data {
+            serde_json::to_string(&MigrationMsg::Data {
+                vnode: vnode.id,
                 id: 0,
                 data: vnode.history,
             })
@@ -49,7 +48,7 @@ async fn do_migrate(logger: Logger, target: String, vnode: VNode) {
 
     ws_stream
         .send(Message::text(
-            serde_json::to_string(&Migration::Finish { id: vnode.id }).unwrap(),
+            serde_json::to_string(&MigrationMsg::Finish { vnode: vnode.id }).unwrap(),
         ))
         .await
         .unwrap();
@@ -70,17 +69,48 @@ pub(crate) async fn tick_loop(logger: Logger, id: String, mut tasks: UnboundedRe
                             "relocating vnode {} to node {}", vnode.id, target
                         );
                         task::spawn(do_migrate(logger.clone(), target, vnode));
-                }
+                    }
                 },
 
-                Some(Task::MigrateIn { mut data, vnode }) => {
+                Some(Task::MigrateInStart { vnode, src }) => {
+                    if vnodes.contains_key(&vnode) {
+                        error!(logger, "vnode {} already known", vnode)
+                    } else {
+                        vnodes.insert(vnode, VNode{id: vnode, history: vec![], migration: Some(Migration{partner: src, chunk: 0, direction: Direction::Inbound})});
+
+                    }
+                }
+                Some(Task::MigrateIn { mut data, vnode, id }) => {
                     info!(
                         logger,
                         "accepting vnode {} with: {:?}", vnode, data
                     );
-                    data.push(id.clone());
-                    vnodes.insert(vnode, VNode{id: vnode, history: data});
+                    if let Some(node) = vnodes.get_mut(&vnode) {
+                        if let Some(ref mut migration) = &mut node.migration {
+                            assert_eq!(migration.chunk, id);
+                            assert_eq!(migration.direction, Direction::Inbound);
+                            node.history.append(&mut data);
+                            migration.chunk = id + 1;
+                        } else {
+                            error!(logger, "no migration in progress for data vnode {}", vnode)
+
+                        }
+                    } else {
+                        error!(logger, "no migration in progress for data vnode {}", vnode)
+                    }
                 },
+                Some(Task::MigrateInEnd { vnode }) => {
+                    if let Some(node) = vnodes.get_mut(&vnode) {
+                        if let Some(ref mut migration) = &mut node.migration {
+                            assert_eq!(migration.direction, Direction::Inbound);
+                        } else {
+                            error!(logger, "no migration in progress for data vnode {}", vnode)
+                        }
+                        node.migration = None;
+                    } else {
+                        error!(logger, "no migration in progress for data vnode {}", vnode)
+                    }
+                }
                 Some(Task::Assign{vnodes: ids}) => {
                     info!(logger, "Initializing with {:?}", ids);
                     let my_id = &id;
@@ -88,6 +118,7 @@ pub(crate) async fn tick_loop(logger: Logger, id: String, mut tasks: UnboundedRe
                         vnodes.insert(
                             id,
                             VNode {
+                                migration: None,
                                 id,
                                 history: vec![my_id.to_string()],
                             },

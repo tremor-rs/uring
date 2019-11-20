@@ -21,36 +21,56 @@ use vnode_manager::*;
 
 use async_std::net::{SocketAddr, ToSocketAddrs};
 use async_std::net::{TcpListener, TcpStream};
-use async_std::prelude::*;
-use async_std::sync::{Arc, RwLock};
-use async_std::{io, task};
+use async_std::{ task};
 use async_tungstenite::connect_async;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures::stream::Stream;
-use futures::task::Poll;
-use futures::{select, StreamExt};
+use futures::{ StreamExt};
 use serde::{Deserialize, Serialize};
 use slog::{Drain, Logger};
-use std::collections::{HashMap, VecDeque};
 use std::env;
-use std::time::Duration;
 use tungstenite::protocol::Message;
-use uring_common::{MRingNodes, Relocations, RequestId};
-use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
 
 #[macro_use]
 extern crate slog;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+enum Direction {
+    Inbound,
+    Outbound,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct Migration {
+    partner: String,
+    chunk: u64,
+    direction: Direction,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct VNode {
     id: u64,
+    migration: Option<Migration>,
     history: Vec<String>,
 }
 
 enum Task {
-    MigrateOut { target: String, vnode: u64 },
-    Assign { vnodes: Vec<u64> },
-    MigrateIn { vnode: u64, data: Vec<String> },
+    MigrateOut {
+        target: String,
+        vnode: u64,
+    },
+    Assign {
+        vnodes: Vec<u64>,
+    },
+    MigrateInStart {
+        src: String,
+        vnode: u64,
+    },
+    MigrateIn {
+        vnode: u64,
+        id: u64,
+        data: Vec<String>,
+    },
+    MigrateInEnd {
+        vnode: u64,
+    },
 }
 
 struct Connection {
@@ -60,17 +80,26 @@ struct Connection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum Migration {
-    Start { id: u64 },
-    Data { id: u64, data: Vec<String> },
-    Finish { id: u64 },
+enum MigrationMsg {
+    Start {
+        src: String,
+        vnode: u64,
+    },
+    Data {
+        vnode: u64,
+        id: u64,
+        data: Vec<String>,
+    },
+    Finish {
+        vnode: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum MigrationAck {
-    Start { id: u64 },
+    Start { vnode: u64 },
     Data { id: u64 },
-    Finish { id: u64 },
+    Finish { vnode: u64 },
 }
 
 async fn handle_connection(logger: Logger, connection: Connection) {
@@ -118,20 +147,28 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: UnboundedSe
             .expect("Failed to forward request");
         if let Some(msg) = response_rx.next().await {
             match serde_json::from_slice(&msg.into_data()) {
-                Ok(Migration::Start { id }) => {
-                    vnode_id = Some(id);
-                    info!(logger, "migration for node {} started", id);
+                Ok(MigrationMsg::Start { src, vnode }) => {
+                    assert!(vnode_id.is_none());
+                    vnode_id = Some(vnode);
+                    tasks
+                        .unbounded_send(Task::MigrateInStart { src, vnode })
+                        .unwrap();
+                    info!(logger, "migration for node {} started", vnode);
                 }
-                Ok(Migration::Data { data, id }) => {
+                Ok(MigrationMsg::Data { vnode, data, id }) => {
                     if let Some(vnode) = vnode_id {
                         tasks
-                            .unbounded_send(Task::MigrateIn { data, vnode })
+                            .unbounded_send(Task::MigrateIn { data, vnode, id })
                             .unwrap();
                     }
                 }
-                Ok(Migration::Finish { id }) => {
+                Ok(MigrationMsg::Finish { vnode }) => {
+                    if let Some(node_id) = vnode_id {
+                        assert_eq!(node_id, vnode);
+                        tasks.unbounded_send(Task::MigrateInEnd { vnode }).unwrap();
+                    }
                     vnode_id = None;
-                    info!(logger, "migration for node {} finished", id);
+                    info!(logger, "migration for node {} finished", vnode);
                 }
                 Err(e) => error!(logger, "failed to decode: {}", e),
             }

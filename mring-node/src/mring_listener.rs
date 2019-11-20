@@ -13,21 +13,10 @@
 // limitations under the License.
 
 use super::*;
-use async_std::net::{SocketAddr, ToSocketAddrs};
-use async_std::net::{TcpListener, TcpStream};
-use async_std::prelude::*;
-use async_std::sync::{Arc, RwLock};
-use async_std::{io, task};
 use async_tungstenite::connect_async;
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use futures::stream::Stream;
-use futures::task::Poll;
+use futures::channel::mpsc::{ UnboundedSender};
 use futures::{select, FutureExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::{HashMap, VecDeque};
-use std::env;
-use std::time::Duration;
 use tungstenite::protocol::Message;
 use uring_common::{MRingNodes, Relocations, RequestId};
 use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
