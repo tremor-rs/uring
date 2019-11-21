@@ -24,21 +24,27 @@ use tungstenite::protocol::Message;
 async fn do_migrate(logger: Logger, target: String, vnode: u64, cnc: UnboundedSender<Cmd>) {
     let url = url::Url::parse(&format!("ws://{}", target)).unwrap();
 
-    let cancel = Cmd::CancleMigration { vnode, target: target.clone() };
+    let cancel = Cmd::CancleHandoff {
+        vnode,
+        target: target.clone(),
+    };
     let (mut ws_stream, _) = if let Ok(r) = connect_async(url).await {
         r
     } else {
-        error!(logger, "Failed to connect to {} to transfair vnode {}", target, vnode);
+        error!(
+            logger,
+            "Failed to connect to {} to transfair vnode {}", target, vnode
+        );
         cnc.unbounded_send(cancel).unwrap();
         return;
     };
     let src = String::from("");
-    info!(logger, "Starting migration for vnode {}", vnode);
+    info!(logger, "Starting handoff for vnode {}", vnode);
 
     if !try_ack(
         &mut ws_stream,
-        MigrationMsg::Start { src, vnode },
-        MigrationAck::Start { vnode },
+        HandoffMsg::Start { src, vnode },
+        HandoffAck::Start { vnode },
     )
     .await
     {
@@ -51,7 +57,7 @@ async fn do_migrate(logger: Logger, target: String, vnode: u64, cnc: UnboundedSe
     loop {
         info!(logger, "requesting chunk {} from vnode {}", chunk, vnode);
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
-        cnc.unbounded_send(Cmd::GetMigrationData {
+        cnc.unbounded_send(Cmd::GetHandoffData {
             vnode,
             chunk,
             reply: tx.clone(),
@@ -67,8 +73,8 @@ async fn do_migrate(logger: Logger, target: String, vnode: u64, cnc: UnboundedSe
 
             if !try_ack(
                 &mut ws_stream,
-                MigrationMsg::Data { vnode, chunk, data },
-                MigrationAck::Data { chunk },
+                HandoffMsg::Data { vnode, chunk, data },
+                HandoffAck::Data { chunk },
             )
             .await
             {
@@ -92,23 +98,23 @@ async fn do_migrate(logger: Logger, target: String, vnode: u64, cnc: UnboundedSe
 
     if !try_ack(
         &mut ws_stream,
-        MigrationMsg::Finish { vnode },
-        MigrationAck::Finish { vnode },
+        HandoffMsg::Finish { vnode },
+        HandoffAck::Finish { vnode },
     )
     .await
     {
         error!(logger, "failed to finish transfair for vnode {}", vnode);
         cnc.unbounded_send(cancel).unwrap();
     }
-    cnc.unbounded_send(Cmd::FinishMigration { vnode }).unwrap();
+    cnc.unbounded_send(Cmd::FinishHandoff { vnode }).unwrap();
 }
 
 async fn try_ack(
     stream: &mut async_tungstenite::WebSocketStream<
         async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
     >,
-    msg: MigrationMsg,
-    ack: MigrationAck,
+    msg: HandoffMsg,
+    ack: HandoffAck,
 ) -> bool {
     stream
         .send(Message::text(serde_json::to_string(&msg).unwrap()))
@@ -116,7 +122,7 @@ async fn try_ack(
         .unwrap();
 
     if let Some(Ok(data)) = stream.next().await {
-        let r: MigrationAck = serde_json::from_slice(&data.into_data()).unwrap();
+        let r: HandoffAck = serde_json::from_slice(&data.into_data()).unwrap();
         ack == r
     } else {
         false
@@ -124,15 +130,15 @@ async fn try_ack(
 }
 
 enum Cmd {
-    GetMigrationData {
+    GetHandoffData {
         vnode: u64,
         chunk: u64,
         reply: UnboundedSender<(u64, Vec<String>)>,
     },
-    FinishMigration {
+    FinishHandoff {
         vnode: u64,
     },
-    CancleMigration {
+    CancleHandoff {
         vnode: u64,
         target: String,
     },
@@ -145,21 +151,21 @@ fn handle_cmd(
     tasks_tx: &UnboundedSender<Task>,
 ) {
     match cmd {
-        Some(Cmd::GetMigrationData {
+        Some(Cmd::GetHandoffData {
             vnode,
             chunk,
             reply,
         }) => {
             if let Some(vnode) = vnodes.get_mut(&vnode) {
-                if let Some(ref mut migration) = vnode.migration {
-                    assert_eq!(chunk, migration.chunk);
-                    assert_eq!(migration.direction, Direction::Outbound);
+                if let Some(ref mut handoff) = vnode.handoff {
+                    assert_eq!(chunk, handoff.chunk);
+                    assert_eq!(handoff.direction, Direction::Outbound);
                     if let Some(data) = vnode.data.get(chunk as usize) {
                         reply.unbounded_send((chunk, vec![data.clone()])).unwrap();
                     } else {
                         reply.unbounded_send((chunk, vec![])).unwrap();
                     };
-                    migration.chunk += 1;
+                    handoff.chunk += 1;
                 } else {
                     info!(logger, "Not in a migraiton");
                 }
@@ -167,13 +173,13 @@ fn handle_cmd(
                 info!(logger, "Unknown vnode");
             }
         }
-        Some(Cmd::CancleMigration { vnode, target }) => {
+        Some(Cmd::CancleHandoff { vnode, target }) => {
             if let Some(node) = vnodes.get_mut(&vnode) {
-                assert!(node.migration.is_some());
-                node.migration = None;
+                assert!(node.handoff.is_some());
+                node.handoff = None;
                 warn!(
                     logger,
-                    "Canceling migration of vnode {} to {} - requeing to restart", vnode, target
+                    "Canceling handoff of vnode {} to {} - requeing to restart", vnode, target
                 );
                 tasks_tx
                     .unbounded_send(Task::MigrateOut { target, vnode })
@@ -182,9 +188,9 @@ fn handle_cmd(
                 info!(logger, "Unknown vnode");
             }
         }
-        Some(Cmd::FinishMigration { vnode }) => {
+        Some(Cmd::FinishHandoff { vnode }) => {
             let v = vnodes.remove(&vnode).unwrap();
-            let m = v.migration.unwrap();
+            let m = v.handoff.unwrap();
             assert_eq!(m.direction, Direction::Outbound);
         }
         None => (),
@@ -207,8 +213,8 @@ fn handle_tick(
                         logger,
                         "relocating vnode {} to node {}", vnode.id, target
                     );
-                    assert!(vnode.migration.is_none());
-                    vnode.migration = Some(Migration {
+                    assert!(vnode.handoff.is_none());
+                    vnode.handoff = Some(Handoff {
                         partner: target.clone(),
                         chunk: 0,
                         direction: Direction::Outbound
@@ -222,7 +228,7 @@ fn handle_tick(
                 if vnodes.contains_key(&vnode) {
                     error!(logger, "vnode {} already known", vnode)
                 } else {
-                    vnodes.insert(vnode, VNode{id: vnode, data: vec![], migration: Some(Migration{partner: src, chunk: 0, direction: Direction::Inbound})});
+                    vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(Handoff{partner: src, chunk: 0, direction: Direction::Inbound})});
 
                 }
             }
@@ -232,30 +238,30 @@ fn handle_tick(
                     "accepting vnode {} with: {:?}", vnode, data
                 );
                 if let Some(node) = vnodes.get_mut(&vnode) {
-                    if let Some(ref mut migration) = &mut node.migration {
-                        assert_eq!(migration.chunk, chunk);
-                        assert_eq!(migration.direction, Direction::Inbound);
+                    if let Some(ref mut handoff) = &mut node.handoff {
+                        assert_eq!(handoff.chunk, chunk);
+                        assert_eq!(handoff.direction, Direction::Inbound);
                         node.data.append(&mut data);
-                        migration.chunk = chunk + 1;
+                        handoff.chunk = chunk + 1;
                     } else {
-                        error!(logger, "no migration in progress for data vnode {}", vnode)
+                        error!(logger, "no handoff in progress for data vnode {}", vnode)
 
                     }
                 } else {
-                    error!(logger, "no migration in progress for data vnode {}", vnode)
+                    error!(logger, "no handoff in progress for data vnode {}", vnode)
                 }
             },
             Some(Task::MigrateInEnd { vnode }) => {
                 if let Some(node) = vnodes.get_mut(&vnode) {
-                    if let Some(ref mut migration) = &mut node.migration {
-                        assert_eq!(migration.direction, Direction::Inbound);
+                    if let Some(ref mut handoff) = &mut node.handoff {
+                        assert_eq!(handoff.direction, Direction::Inbound);
                     } else {
-                        error!(logger, "no migration in progress for data vnode {}", vnode)
+                        error!(logger, "no handoff in progress for data vnode {}", vnode)
                     }
-                    node.migration = None;
+                    node.handoff = None;
                     node.data.push(id.to_string());
                 } else {
-                    error!(logger, "no migration in progress for data vnode {}", vnode)
+                    error!(logger, "no handoff in progress for data vnode {}", vnode)
                 }
             }
             Some(Task::Assign{vnodes: ids}) => {
@@ -265,7 +271,7 @@ fn handle_tick(
                     vnodes.insert(
                         id,
                         VNode {
-                            migration: None,
+                            handoff: None,
                             id,
                             data: vec![my_id.to_string()],
                         },

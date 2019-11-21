@@ -39,7 +39,7 @@ enum Direction {
     Outbound,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct Migration {
+struct Handoff {
     partner: String,
     chunk: u64,
     direction: Direction,
@@ -47,7 +47,7 @@ struct Migration {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct VNode {
     id: u64,
-    migration: Option<Migration>,
+    handoff: Option<Handoff>,
     data: Vec<String>,
 }
 
@@ -82,7 +82,7 @@ struct Connection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-enum MigrationMsg {
+enum HandoffMsg {
     Start {
         src: String,
         vnode: u64,
@@ -98,7 +98,7 @@ enum MigrationMsg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-enum MigrationAck {
+enum HandoffAck {
     Start { vnode: u64 },
     Data { chunk: u64 },
     Finish { vnode: u64 },

@@ -1,4 +1,3 @@
-
 // Copyright 2018-2019, Wayfair GmbH
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_std::net::{ ToSocketAddrs};
+use super::*;
+use async_std::net::ToSocketAddrs;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
-use futures::channel::mpsc::{ UnboundedSender};
+use futures::channel::mpsc::UnboundedSender;
 use futures::StreamExt;
-use slog::{ Logger};
+use slog::Logger;
 use tungstenite::protocol::Message;
-use super::*;
 
 async fn handle_connection(logger: Logger, mut connection: Connection) {
     while let Some(msg) = connection.rx.next().await {
@@ -29,22 +28,22 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
             "Received a message from {}: {}", connection.addr, msg
         );
         match serde_json::from_slice(&msg.into_data()) {
-            Ok(MigrationMsg::Start { src, vnode }) => {
+            Ok(HandoffMsg::Start { src, vnode }) => {
                 assert!(connection.vnode.is_none());
                 connection.vnode = Some(vnode);
                 connection
                     .tasks
                     .unbounded_send(Task::MigrateInStart { src, vnode })
                     .unwrap();
-                info!(logger, "migration for node {} started", vnode);
+                info!(logger, "handoff for node {} started", vnode);
                 connection
                     .tx
                     .unbounded_send(Message::text(
-                        serde_json::to_string(&MigrationAck::Start { vnode }).unwrap(),
+                        serde_json::to_string(&HandoffAck::Start { vnode }).unwrap(),
                     ))
                     .expect("Failed to forward message");
             }
-            Ok(MigrationMsg::Data { vnode, data, chunk }) => {
+            Ok(HandoffMsg::Data { vnode, data, chunk }) => {
                 if let Some(vnode_current) = connection.vnode {
                     assert_eq!(vnode, vnode_current);
                     connection
@@ -54,12 +53,13 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     connection
                         .tx
                         .unbounded_send(Message::text(
-                            serde_json::to_string(&MigrationAck::Data { chunk: chunk + 1 }).unwrap(),
+                            serde_json::to_string(&HandoffAck::Data { chunk: chunk + 1 })
+                                .unwrap(),
                         ))
                         .expect("Failed to forward message");
                 }
             }
-            Ok(MigrationMsg::Finish { vnode }) => {
+            Ok(HandoffMsg::Finish { vnode }) => {
                 if let Some(node_id) = connection.vnode {
                     assert_eq!(node_id, vnode);
                     connection
@@ -69,12 +69,12 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     connection
                         .tx
                         .unbounded_send(Message::text(
-                            serde_json::to_string(&MigrationAck::Finish { vnode }).unwrap(),
+                            serde_json::to_string(&HandoffAck::Finish { vnode }).unwrap(),
                         ))
                         .expect("Failed to forward message");
                 }
                 connection.vnode = None;
-                info!(logger, "migration for node {} finished", vnode);
+                info!(logger, "handoff for node {} finished", vnode);
             }
             Err(e) => error!(logger, "failed to decode: {}", e),
         }
