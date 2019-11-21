@@ -53,7 +53,7 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     connection
                         .tx
                         .unbounded_send(Message::text(
-                            serde_json::to_string(&HandoffAck::Data { chunk: chunk + 1 }).unwrap(),
+                            serde_json::to_string(&HandoffAck::Data { chunk: chunk }).unwrap(),
                         ))
                         .expect("Failed to forward message");
                 }

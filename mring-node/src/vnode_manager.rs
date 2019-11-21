@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tungstenite::protocol::Message;
 
-async fn do_handoff(logger: Logger, target: String, vnode: u64, cnc: UnboundedSender<Cmd>) {
+async fn do_handoff(logger: Logger, src: String, target: String, vnode: u64, cnc: UnboundedSender<Cmd>) {
     let url = url::Url::parse(&format!("ws://{}", target)).unwrap();
 
     let cancel = Cmd::CancleHandoff {
@@ -220,17 +220,13 @@ fn handle_tick(
                         direction: Direction::Outbound
 
                     });
-                    task::spawn(do_handoff(logger.clone(), target, vnode.id, cnc_tx.clone()));
+                    task::spawn(do_handoff(logger.clone(), id.to_string(), target, vnode.id, cnc_tx.clone()));
                 }
             },
 
             Some(Task::HandoffInStart { vnode, src }) => {
-                if vnodes.contains_key(&vnode) {
-                    error!(logger, "vnode {} already known", vnode)
-                } else {
-                    vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(Handoff{partner: src, chunk: 0, direction: Direction::Inbound})});
-
-                }
+                vnodes.remove(&vnode);
+                vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(Handoff{partner: src, chunk: 0, direction: Direction::Inbound})});
             }
             Some(Task::HandoffIn { mut data, vnode, chunk }) => {
                 info!(
