@@ -20,8 +20,7 @@ use crate::network::{
 };
 use crate::pubsub;
 use crate::raft_node::RaftNodeStatus;
-use crate::service::kv::{Event as KVEvent, KV_SERVICE};
-use crate::service::mring::{Event as MRingEvent, MRING_SERVICE};
+use crate::service::{kv, mring};
 use crate::{NodeId, RequestId};
 use actix::prelude::*;
 use actix_web::{middleware, web, App, HttpServer};
@@ -140,40 +139,40 @@ impl NetworkTrait for Network {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    MRING_SERVICE,
-                    MRingEvent::set_size(size),
+                    mring::ID,
+                    mring::Event::set_size(size),
                 ))
             }
             Ok(UrMsg::MRingGetSize(reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    MRING_SERVICE,
-                    MRingEvent::get_size(),
+                    mring::ID,
+                    mring::Event::get_size(),
                 ))
             }
             Ok(UrMsg::MRingGetNodes(reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    MRING_SERVICE,
-                    MRingEvent::get_nodes(),
+                    mring::ID,
+                    mring::Event::get_nodes(),
                 ))
             }
             Ok(UrMsg::MRingAddNode(node, reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    MRING_SERVICE,
-                    MRingEvent::add_node(node),
+                    mring::ID,
+                    mring::Event::add_node(node),
                 ))
             }
             Ok(UrMsg::MRingRemoveNode(node, reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    MRING_SERVICE,
-                    MRingEvent::remove_node(node),
+                    mring::ID,
+                    mring::Event::remove_node(node),
                 ))
             }
             Ok(UrMsg::Status(reply)) => Ok(Status(reply)),
@@ -181,27 +180,27 @@ impl NetworkTrait for Network {
             Ok(UrMsg::AddNode(id, reply)) => Ok(AddNode(id, reply)),
             Ok(UrMsg::Get(key, reply)) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(eid, KV_SERVICE, KVEvent::get(key)))
+                Ok(RaftNetworkMsg::Event(eid, kv::ID, kv::Event::get(key)))
             }
             Ok(UrMsg::Put(key, value, reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    KV_SERVICE,
-                    KVEvent::put(key, value),
+                    kv::ID,
+                    kv::Event::put(key, value),
                 ))
             }
             Ok(UrMsg::Cas(key, check_value, store_value, reply)) => {
                 let eid = self.register_reply(reply);
                 Ok(RaftNetworkMsg::Event(
                     eid,
-                    KV_SERVICE,
-                    KVEvent::cas(key, check_value, store_value),
+                    kv::ID,
+                    kv::Event::cas(key, check_value, store_value),
                 ))
             }
             Ok(UrMsg::Delete(key, reply)) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(eid, KV_SERVICE, KVEvent::delete(key)))
+                Ok(RaftNetworkMsg::Event(eid, kv::ID, kv::Event::delete(key)))
             }
             Ok(UrMsg::AckProposal(pid, success)) => Ok(AckProposal(pid, success)),
             Ok(UrMsg::ForwardProposal(from, pid, sid, data)) => {

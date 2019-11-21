@@ -23,7 +23,7 @@ use std::marker::PhantomData;
 use uring_common::{MRingNodes, Relocations};
 use ws_proto::PSMRing;
 
-pub const MRING_SERVICE: ServiceId = ServiceId(1);
+pub const ID: ServiceId = ServiceId(1);
 
 pub struct Service<Placement>
 where
@@ -81,12 +81,10 @@ where
     where
         Storage: storage::Storage,
     {
-        storage
-            .get(MRING_SERVICE.0 as u16, RING_SIZE)
-            .and_then(|v| {
-                let mut rdr = Cursor::new(v);
-                rdr.read_u64::<BigEndian>().ok()
-            })
+        storage.get(mring::ID.0 as u16, RING_SIZE).and_then(|v| {
+            let mut rdr = Cursor::new(v);
+            rdr.read_u64::<BigEndian>().ok()
+        })
     }
 
     fn nodes<Storage>(&self, storage: &Storage) -> Option<MRingNodes>
@@ -94,7 +92,7 @@ where
         Storage: storage::Storage,
     {
         storage
-            .get(MRING_SERVICE.0 as u16, NODES)
+            .get(mring::ID.0 as u16, NODES)
             .and_then(|v| serde_json::from_slice(&v).ok())
     }
 }
@@ -123,7 +121,7 @@ where
                         let mut data = Cursor::new(&mut data[..]);
                         data.put_u64_be(size);
                     }
-                    storage.put(MRING_SERVICE.0 as u16, RING_SIZE, &data);
+                    storage.put(mring::ID.0 as u16, RING_SIZE, &data);
                     size
                 };
 
@@ -139,7 +137,7 @@ where
 
                 Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
             }
-            Ok(Event::GetNodes) => Ok(storage.get(MRING_SERVICE.0 as u16, NODES)),
+            Ok(Event::GetNodes) => Ok(storage.get(mring::ID.0 as u16, NODES)),
             Ok(Event::AddNode { node }) => {
                 let size = if let Some(size) = self.size(storage) {
                     size
@@ -177,7 +175,7 @@ where
                     next
                 };
                 let next = serde_json::to_vec(&next).unwrap();
-                storage.put(MRING_SERVICE.0 as u16, NODES, &next);
+                storage.put(mring::ID.0 as u16, NODES, &next);
                 Ok(Some(next))
             }
             Ok(Event::RemoveNode { node }) => {
@@ -201,7 +199,7 @@ where
                         ))
                         .unwrap();
                     let next = serde_json::to_vec(&next).unwrap();
-                    storage.put(MRING_SERVICE.0 as u16, NODES, &next);
+                    storage.put(mring::ID.0 as u16, NODES, &next);
                     Ok(Some(next))
                 } else {
                     Ok(None)

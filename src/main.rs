@@ -23,8 +23,8 @@ pub mod storage;
 
 use crate::network::{ws, Network, RaftNetworkMsg};
 use crate::raft_node::*;
-use crate::service::kv::{Service as KVService, KV_SERVICE};
-use crate::service::mring::{Service as MRingService, MRING_SERVICE};
+use crate::service::mring::{self, placement::continuous};
+use crate::service::{kv, Service};
 use crate::storage::URRocksStorage;
 use clap::{App as ClApp, Arg};
 use serde::{Deserialize, Serialize};
@@ -60,24 +60,34 @@ pub struct KVs {
 
 fn raft_loop<N: Network>(
     id: NodeId,
-    bootstrap: bool,
+    bootstrap: Option<u64>,
     pubsub: pubsub::Channel,
     network: N,
     logger: Logger,
 ) {
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut t1 = Instant::now();
-    let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
+    let mut node: RaftNode<URRocksStorage, _> = if bootstrap.is_some() {
         RaftNode::create_raft_leader(&logger, id, pubsub, network)
     } else {
         RaftNode::create_raft_follower(&logger, id, pubsub, network)
     };
     node.set_raft_tick_duration(Duration::from_millis(100));
     node.log();
-    let kv = KVService::new(0);
-    node.add_service(KV_SERVICE, Box::new(kv));
-    let vnode: MRingService<service::mring::placement::continuous::Strategy> = MRingService::new();
-    node.add_service(MRING_SERVICE, Box::new(vnode));
+    let kv = kv::Service::new(0);
+    node.add_service(kv::ID, Box::new(kv));
+    let mut vnode: mring::Service<continuous::Strategy> = mring::Service::new();
+
+    if let Some(size) = bootstrap {
+        vnode
+            .execute(
+                node.storage(),
+                node.pubsub(),
+                service::mring::Event::set_size(size),
+            )
+            .unwrap();
+    }
+    node.add_service(mring::ID, Box::new(vnode));
 
     loop {
         thread::sleep(Duration::from_millis(10));
@@ -110,9 +120,9 @@ fn main() -> std::io::Result<()> {
             Arg::with_name("bootstrap")
                 .short("b")
                 .long("bootstrap")
-                .value_name("BOOTSTRAP")
-                .help("Sets the node to bootstrap and become leader")
-                .takes_value(false),
+                .value_name("RING_SIZE")
+                .help("Sets the node to bootstrap and become leader and initialized mring size")
+                .takes_value(true),
         )
         .arg(
             Arg::with_name("no-json")
@@ -153,7 +163,7 @@ fn main() -> std::io::Result<()> {
         slog::Logger::root(drain, o!())
     };
     let peers = matches.values_of_lossy("peers").unwrap_or(vec![]);
-    let bootstrap = matches.is_present("bootstrap");
+    let bootstrap: Option<u64> = matches.value_of("bootstrap").map(|s| s.parse().unwrap());
     let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
     let id = NodeId(matches.value_of("id").unwrap_or("1").parse().unwrap());
     let loop_logger = logger.clone();

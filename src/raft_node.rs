@@ -126,6 +126,12 @@ where
     pub fn add_service(&mut self, sid: ServiceId, service: Box<dyn Service<Storage>>) {
         self.services.insert(sid, service);
     }
+    pub fn storage(&self) -> &Storage {
+        &self.raft_group.as_ref().unwrap().raft.raft_log.store
+    }
+    pub fn pubsub(&self) -> &pubsub::Channel {
+        &self.pubsub
+    }
     pub fn tick(&mut self) -> Result<()> {
         loop {
             match self.network.try_recv() {

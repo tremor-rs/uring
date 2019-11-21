@@ -139,7 +139,7 @@ async fn handle_msg(logger: &Logger, id: &str, tasks: &mut UnboundedSender<Task>
 }
 
 async fn handle_change(
-    logger: &Logger,
+    _logger: &Logger,
     id: &str,
     tasks: &mut UnboundedSender<Task>,
     mut relocations: Relocations,

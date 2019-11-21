@@ -16,7 +16,7 @@ use super::*;
 use crate::{pubsub, storage, ServiceId};
 use serde::{Deserialize, Serialize};
 
-pub const KV_SERVICE: ServiceId = ServiceId(0);
+pub const ID: ServiceId = ServiceId(0);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) enum PSEvent {
