@@ -123,6 +123,7 @@ websocat ws://localhost:8081/uring
 
 {"Subscribe": {"channel": "kv"}}
 {"Subscribe": {"channel": "mring"}}
+{"Subscribe": {"channel": "uring"}}
 ```
 
 ## python client example
@@ -143,6 +144,7 @@ def report(subject,json):
 time.sleep(1)
 rc.subscribe('kv', lambda json: report('KV', json))
 rc.subscribe('mring', lambda json: report('MRing', json))
+rc.subscribe('uring', lambda json: report('URing', json))
 
 while True:
     time.sleep(1)
