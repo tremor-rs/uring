@@ -388,7 +388,7 @@ dependencies = [
 [[package]]
 name = "async-tungstenite"
 version = "0.1.0"
-source = "git+https://github.com/sdroege/async-tungstenite#eb2c63ee73a8d4955671e565964bba6ea53aa2db"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "async-std 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-tls 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1421,7 +1421,7 @@ version = "0.1.0"
 dependencies = [
  "async-std 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-tls 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "async-tungstenite 0.1.0 (git+https://github.com/sdroege/async-tungstenite)",
+ "async-tungstenite 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.102 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.41 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2771,7 +2771,7 @@ dependencies = [
 "checksum async-std 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f6ee33a6cfdd96bfde032d14b29905244a70868bd8dda1f3b13504d6cbc3b7bc"
 "checksum async-task 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "de6bd58f7b9cc49032559422595c81cbfcf04db2f2133592f70af19e258a1ced"
 "checksum async-tls 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)" = "6ce6977f57fa68da77ffe5542950d47e9c23d65f5bc7cb0a9f8700996913eec7"
-"checksum async-tungstenite 0.1.0 (git+https://github.com/sdroege/async-tungstenite)" = "<none>"
+"checksum async-tungstenite 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8f9b9e4a892daf84c26c86c782755c791eba3140cb1d10220bbb3b5efce802f7"
 "checksum atty 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)" = "1803c647a3ec87095e7ae7acfca019e98de5ec9a7d01343f611cf3152ed71a90"
 "checksum autocfg 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "1d49d90015b3c36167a20fe2810c5cd875ad504b39cff3d4eae7977e6b7c1cb2"
 "checksum awc 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "5e995283278dd3bf0449e7534e77184adb1570c0de8b6a50bf7c9d01ad8db8c4"
