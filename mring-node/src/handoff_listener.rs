@@ -33,7 +33,7 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                 connection.vnode = Some(vnode);
                 connection
                     .tasks
-                    .unbounded_send(Task::MigrateInStart { src, vnode })
+                    .unbounded_send(Task::HandoffInStart { src, vnode })
                     .unwrap();
                 info!(logger, "handoff for node {} started", vnode);
                 connection
@@ -48,13 +48,12 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     assert_eq!(vnode, vnode_current);
                     connection
                         .tasks
-                        .unbounded_send(Task::MigrateIn { data, vnode, chunk })
+                        .unbounded_send(Task::HandoffIn { data, vnode, chunk })
                         .unwrap();
                     connection
                         .tx
                         .unbounded_send(Message::text(
-                            serde_json::to_string(&HandoffAck::Data { chunk: chunk + 1 })
-                                .unwrap(),
+                            serde_json::to_string(&HandoffAck::Data { chunk: chunk + 1 }).unwrap(),
                         ))
                         .expect("Failed to forward message");
                 }
@@ -64,7 +63,7 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     assert_eq!(node_id, vnode);
                     connection
                         .tasks
-                        .unbounded_send(Task::MigrateInEnd { vnode })
+                        .unbounded_send(Task::HandoffInEnd { vnode })
                         .unwrap();
                     connection
                         .tx

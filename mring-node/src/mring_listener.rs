@@ -160,7 +160,7 @@ async fn handle_change(
                 for vnode in ids {
                     let target = target.clone();
                     tasks
-                        .unbounded_send(Task::MigrateOut { target, vnode })
+                        .unbounded_send(Task::HandoffOut { target, vnode })
                         .unwrap();
                 }
             }

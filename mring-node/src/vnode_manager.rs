@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tungstenite::protocol::Message;
 
-async fn do_migrate(logger: Logger, target: String, vnode: u64, cnc: UnboundedSender<Cmd>) {
+async fn do_handoff(logger: Logger, target: String, vnode: u64, cnc: UnboundedSender<Cmd>) {
     let url = url::Url::parse(&format!("ws://{}", target)).unwrap();
 
     let cancel = Cmd::CancleHandoff {
@@ -182,7 +182,7 @@ fn handle_cmd(
                     "Canceling handoff of vnode {} to {} - requeing to restart", vnode, target
                 );
                 tasks_tx
-                    .unbounded_send(Task::MigrateOut { target, vnode })
+                    .unbounded_send(Task::HandoffOut { target, vnode })
                     .unwrap();
             } else {
                 info!(logger, "Unknown vnode");
@@ -207,7 +207,7 @@ fn handle_tick(
     select! {
         task = tasks.next() =>
         match task {
-            Some(Task::MigrateOut { target, vnode }) => {
+            Some(Task::HandoffOut { target, vnode }) => {
                 if let Some(vnode) = vnodes.get_mut(&vnode){
                     info!(
                         logger,
@@ -220,11 +220,11 @@ fn handle_tick(
                         direction: Direction::Outbound
 
                     });
-                    task::spawn(do_migrate(logger.clone(), target, vnode.id, cnc_tx.clone()));
+                    task::spawn(do_handoff(logger.clone(), target, vnode.id, cnc_tx.clone()));
                 }
             },
 
-            Some(Task::MigrateInStart { vnode, src }) => {
+            Some(Task::HandoffInStart { vnode, src }) => {
                 if vnodes.contains_key(&vnode) {
                     error!(logger, "vnode {} already known", vnode)
                 } else {
@@ -232,7 +232,7 @@ fn handle_tick(
 
                 }
             }
-            Some(Task::MigrateIn { mut data, vnode, chunk }) => {
+            Some(Task::HandoffIn { mut data, vnode, chunk }) => {
                 info!(
                     logger,
                     "accepting vnode {} with: {:?}", vnode, data
@@ -251,7 +251,7 @@ fn handle_tick(
                     error!(logger, "no handoff in progress for data vnode {}", vnode)
                 }
             },
-            Some(Task::MigrateInEnd { vnode }) => {
+            Some(Task::HandoffInEnd { vnode }) => {
                 if let Some(node) = vnodes.get_mut(&vnode) {
                     if let Some(ref mut handoff) = &mut node.handoff {
                         assert_eq!(handoff.direction, Direction::Inbound);

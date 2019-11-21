@@ -52,23 +52,23 @@ struct VNode {
 }
 
 enum Task {
-    MigrateOut {
+    HandoffOut {
         target: String,
         vnode: u64,
     },
     Assign {
         vnodes: Vec<u64>,
     },
-    MigrateInStart {
+    HandoffInStart {
         src: String,
         vnode: u64,
     },
-    MigrateIn {
+    HandoffIn {
         vnode: u64,
         chunk: u64,
         data: Vec<String>,
     },
-    MigrateInEnd {
+    HandoffInEnd {
         vnode: u64,
     },
 }
