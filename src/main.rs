@@ -60,14 +60,15 @@ pub struct KVs {
 
 fn raft_loop<N: Network>(
     id: NodeId,
-    bootstrap: Option<u64>,
+    bootstrap: bool,
+    ring_size: Option<u64>,
     pubsub: pubsub::Channel,
     network: N,
     logger: Logger,
 ) {
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut t1 = Instant::now();
-    let mut node: RaftNode<URRocksStorage, _> = if bootstrap.is_some() {
+    let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
         RaftNode::create_raft_leader(&logger, id, pubsub, network)
     } else {
         RaftNode::create_raft_follower(&logger, id, pubsub, network)
@@ -78,14 +79,16 @@ fn raft_loop<N: Network>(
     node.add_service(kv::ID, Box::new(kv));
     let mut vnode: mring::Service<continuous::Strategy> = mring::Service::new();
 
-    if let Some(size) = bootstrap {
-        vnode
-            .execute(
-                node.storage(),
-                node.pubsub(),
-                service::mring::Event::set_size(size),
-            )
-            .unwrap();
+    if let Some(size) = ring_size {
+        if bootstrap {
+            vnode
+                .execute(
+                    node.storage(),
+                    node.pubsub(),
+                    service::mring::Event::set_size(size),
+                )
+                .unwrap();
+        }
     }
     node.add_service(mring::ID, Box::new(vnode));
 
@@ -120,9 +123,17 @@ fn main() -> std::io::Result<()> {
             Arg::with_name("bootstrap")
                 .short("b")
                 .long("bootstrap")
+                .value_name("BOOTSTRAP")
+                .help("Sets the node to bootstrap mode and become leader")
+                .takes_value(false),
+        )
+        .arg(
+            Arg::with_name("ring-size")
+                .short("r")
+                .long("ring-size")
                 .value_name("RING_SIZE")
-                .help("Sets the node to bootstrap and become leader and initialized mring size")
-                .takes_value(true),
+                .help("Initialized mring size, only has an effect when used together with --bootstrap")
+                .takes_value(false),
         )
         .arg(
             Arg::with_name("no-json")
@@ -163,7 +174,8 @@ fn main() -> std::io::Result<()> {
         slog::Logger::root(drain, o!())
     };
     let peers = matches.values_of_lossy("peers").unwrap_or(vec![]);
-    let bootstrap: Option<u64> = matches.value_of("bootstrap").map(|s| s.parse().unwrap());
+    let ring_size: Option<u64> = matches.value_of("ring-size").map(|s| s.parse().unwrap());
+    let bootstrap = matches.is_present("bootstrap");
     let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
     let id = NodeId(matches.value_of("id").unwrap_or("1").parse().unwrap());
     let loop_logger = logger.clone();
@@ -172,7 +184,7 @@ fn main() -> std::io::Result<()> {
 
     let (handle, network) = ws::Network::new(&logger, id, endpoint, peers, ps_tx.clone());
 
-    thread::spawn(move || raft_loop(id, bootstrap, ps_tx, network, loop_logger));
+    thread::spawn(move || raft_loop(id, bootstrap, ring_size, ps_tx, network, loop_logger));
 
     handle.join().unwrap()
 }
