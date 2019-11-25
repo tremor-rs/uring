@@ -1,3 +1,4 @@
 requests>=2.22.0
 simplejson>= 3.16.0
+websockets>=8.1.0
 websocket_client>=0.56.0

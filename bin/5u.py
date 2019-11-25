@@ -18,6 +18,10 @@ import sys
 import contrib
 import simplejson
 import requests
+import websockets
+import threading
+import asyncio
+import subprocess
 
 config_file = 'contrib/5u.json'
 
@@ -31,8 +35,39 @@ cluster = contrib.Cluster()
 cluster.configure(config_file)
 cluster.adjoin()
 
+async def wss_loop(wss, path):
+    while True:
+        args = await wss.recv()
+        cmd = args.split()
+        if cmd[0] == 'pause':
+            print('got pause')
+            for server in cluster.servers:
+                if server.id == cmd[1]:
+                    print(f'Server {server.id} pause')
+                    subprocess.run(["kill", "-STOP", f"{server.pid()}"])
+        if cmd[0] == 'resume':
+            print('got resume')
+            for server in cluster.servers:
+                if server.id == cmd[1]:
+                    print(f'Server {server.id} resume')
+                    subprocess.run(["kill", "-CONT", f"{server.pid()}"])
+            await wss.send(args)
+        if cmd[0] == 'quit':
+            await wss.send('bye')
+            await wss.close()
+            break
+    await wss.close()
+
+def wss():
+    wss = websockets.serve(wss_loop, "0.0.0.0", 8000)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(wss)
+    loop.run_forever()
+
+t = threading.Thread(target=wss())
+t.start()
+
 for line in sys.stdin.readline():
-    print(line)
     for server in cluster.servers:
         print("Killing: {}".format(server.id))
         server.die()

@@ -59,6 +59,7 @@ class Cluster():
             time.sleep(1)
 
             rc = RaftClient()
+            rc.set_name(f'u{id}')
             rc.set_node_id(id)
             rc.set_port(port)
             rc.set_host("localhost")
@@ -113,8 +114,11 @@ class UringServer():
 
 #        print(cmd)
 
-        self.cmd = subprocess.Popen(cmd.split(), cwd = './')
+        self.cmd = subprocess.Popen(cmd, cwd = './', shell=True)
         print("Started process with id: {}".format(self.cmd.pid))
+
+    def pid(self):
+        return self.cmd.pid
 
     def die(self):
         self.cmd.kill()
@@ -159,6 +163,7 @@ class RaftClient(ChannelObserver):
 
     def __init__(self):
         """Constructs a new raft client."""
+        self.name = None
         self.node_id = None
         self.host = None
         self.port = None
@@ -289,6 +294,9 @@ class RaftClient(ChannelObserver):
     def on_open(self):
         # FIXME TODO call virtual ws.open channel ...
         True
+
+    def set_name(self, name):
+        self.name = name
 
     def set_node_id(self, id):
         self.node_id = id
