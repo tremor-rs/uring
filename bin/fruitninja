@@ -6,16 +6,18 @@ import simplejson
 import threading
 import cmd
 import websocket
+import requests
 
 PORTS = [8081,8082,8083,8084,8085]
 
 endpoints = []
 rcs = []
-statuses = []
-i = 1
+statuses = [None, None, None, None, None]
+i = 0
 for port in PORTS:
     rc = contrib.RaftClient()
     rc.set_name('u{}'.format(i))
+    rc.set_node_id(i)
     rc.set_host('127.0.0.1')
     rc.set_port(port)
     rc.ws_start()
@@ -137,17 +139,59 @@ class Commands(cmd.Cmd):
         disconnect_all()
         exit(0)
 
+    def do_adjoin(self, line):
+        """
+            adjoin <id>
+            - Register uring nodes with the uring
+        """
+        leader = None
+
+        # find leader node
+        for rc in rcs:
+            try:
+                b = simplejson.loads(rc.status().content)
+                if b['role'] == "Leader":
+                    leader = rc;
+                    break;
+            except:
+                print(f"ID: {rc.name} DOWN")
+
+        # register nodes ( idempotent )
+        for rc in rcs:
+            if rc.port != leader.port:
+                url = "http://{}:{}/node/{}"
+                print(url.format(leader.host, leader.port, rc.node_id))
+                response = requests.post(url.format(leader.host, leader.port, rc.node_id))
+                print(response)
+                print(response)
+
     def do_status(self, line):
         """
             status
             - Retrieve the status of the uring nodes
         """
+        global statuses
         for rc in rcs:
             try:
                 b = simplejson.loads(rc.status().content)
+                b['ok'] = 'up'
+                statuses[rc.node_id] = b
                 print(f"ID: {b['id']} Role: {b['role']} Term: {b['term']} LastIndex: {b['last_index']}")
             except:
+                b = { 'id': rc.node_id, 'role': 'Zombie', 'term': -1, 'last_index': -1, 'ok': 'down' }
+                statuses[rc.node_id] = b
                 print(f"ID: {rc.name} DOWN")
+        leader_count = len(list(filter(lambda x: x['role'] == "Leader", statuses)))
+        all_adjoined = len(list(filter(lambda x: x['term'] > 0, statuses)))
+        last_index = list(set(map(lambda x: x['last_index'], filter(lambda x: x['last_index'] > 0, statuses))))
+        term = list(set(map(lambda x: x['term'], filter(lambda x: x['term'] > 0, statuses))))
+        li_count = len(last_index)
+        te_count = len(term)
+        converges = leader_count == 1 and all_adjoined == 5 and li_count == 1 and te_count == 1
+        if converges:
+            print("URing is converged: status OK")
+        else:
+            print("URing has diverged: status BAD")
 
     def postloop(self):
         print
