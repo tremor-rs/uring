@@ -74,10 +74,11 @@ class Cluster():
             print('{}: {}'.format(id, port))
 
     def adjoin(self):
-        time.sleep(10)
+        time.sleep(1)
         for node in self.config:
             id = node['id']
             if id != '1':
+                print(f'Registering cluster node {id}')
                 requests.post("http://127.0.0.1:8081/node/{}".format(id))
 
 class UringServer():
@@ -315,7 +316,7 @@ class RaftClient(ChannelObserver):
     def status(self):
         url = "http://{}:{}/status"
         headers = { 'Content-type': 'application/json' }
-        response = requests.get(url.format(self.host, self.port), headers=headers);
+        response = requests.get(url.format(self.host, self.port), headers=headers, timeout=1);
         return response
 
     def register(self):

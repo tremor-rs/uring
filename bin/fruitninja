@@ -1,0 +1,186 @@
+#!/usr/bin/env python3 -u
+import sys
+import contrib
+import time
+import simplejson
+import threading
+import cmd
+import websocket
+
+PORTS = [8081,8082,8083,8084,8085]
+
+endpoints = []
+rcs = []
+statuses = []
+i = 1
+for port in PORTS:
+    rc = contrib.RaftClient()
+    rc.set_name('u{}'.format(i))
+    rc.set_host('127.0.0.1')
+    rc.set_port(port)
+    rc.ws_start()
+    endpoints.append(rc)
+    rcs.append(rc)
+    i = i + 1
+
+
+def on_uring_change(_subject, message):
+    print(f"URING: {message}")
+
+def report(_subject,json):
+    print("{}\n".format(simplejson.dumps(json)))
+
+def maybe_reconnect():
+    for rc in endpoints:
+        if rc.ws.sock is None:
+            rc.ws_start()
+            # rc.subscribe('uring', lambda json: report('URING', json)
+
+def subscribe_all():
+    for rc in endpoints:
+        subscribe(rc)
+
+def subscribe(rc):
+    rc.subscribe('kv', lambda json: report('KV', json))
+    rc.subscribe('mring', lambda json: report('MRing', json))
+    rc.subscribe('uring', lambda json: report('URing', json))
+    rc.subscribe('uring', on_uring_change)
+
+def disconnect_all():
+    for rc in endpoints:
+        if not rc.ws.sock is None:
+            rc.ws.close()
+
+time.sleep(1)
+
+def wsc_open(ws):
+    time.sleep(5)
+    ws.connect()
+    print(f"WS Cluster Command Connection estasblished")
+
+def wsc_message(ws, message):
+    print(f"WS Cluster Command Connection message {message}")
+
+def wsc_error(ws, error):
+    print(f"WS Cluster Command Connection error {error}")
+
+def wsc_close(ws):
+    print("WS Cluster Command Connection closed")
+
+wsc = None
+quit = False
+cwq = []
+
+def wsc():
+    global wsc
+    global quit
+    wsc = websocket.WebSocketApp("ws://127.0.0.1:8000/",
+        on_open = wsc_open,
+        on_message = wsc_message,
+        on_error = wsc_error,
+        on_close = wsc_close)
+    while not quit:
+        wsc.run_forever()
+
+t = threading.Thread(target=wsc)
+t.start()
+
+print('{"fruitninja": "🍒🍌🍏"}')
+print('{"status": "start"}')
+
+time.sleep(5)
+subscribe_all()
+
+
+def pause(which):
+    print(f"Pausing node: {which}")
+    wsc.send(f"pause {which}")
+    print(rcs[which])
+
+def resume(which):
+    print(f"Resuming node: {which}")
+    wsc.send(f"resume {which}")
+    print(rcs[which])
+
+class Commands(cmd.Cmd):
+    prompt = '🍒🍌🍏> '
+
+    def do_interactive(self, line):
+        """
+            interactive
+            - Enters interactive command interpreter mode
+        """
+        self.cmdloop()
+
+    def do_pause(self, line):
+        """
+            pause <node>
+            - Pauses the process running uring node with id <node>
+        """
+        pause(int(line.split()[0])-1)
+
+    def do_resume(self, line):
+        """
+            resume <node>
+            - Resumes the process running uring node with id <node>
+        """
+        resume(int(line.split()[0])-1)
+
+    def do_quit(self, line):
+        """
+            quit
+            - Exits the interactive command interpreter
+        """
+        global quit
+        quit = True
+        wsc.close()
+        disconnect_all()
+        exit(0)
+
+    def do_status(self, line):
+        """
+            status
+            - Retrieve the status of the uring nodes
+        """
+        for rc in rcs:
+            try:
+                b = simplejson.loads(rc.status().content)
+                print(f"ID: {b['id']} Role: {b['role']} Term: {b['term']} LastIndex: {b['last_index']}")
+            except:
+                print(f"ID: {rc.name} DOWN")
+
+    def postloop(self):
+        print
+
+    def emptyline(self):
+        # noop
+        None
+
+def cmd_thread():
+    global quit
+    global cwq
+    line = None
+    while not quit:
+       line = sys.stdin.readline().strip()
+       if line == "quit":
+           quit = True
+           return
+       else:
+           Commands().do_interactive(line)
+           cwq.insert(0, line)
+           print("UNKNOWN CMD: {}".format(line))
+
+commander = threading.Thread(target=cmd_thread)
+commander.start()
+
+i = 0
+while not quit:
+    time.sleep(1)
+    maybe_reconnect()
+    while len(cwq) > 0:
+        print('Task: {}'.format(cwq.pop()))
+        i = i + 1
+
+disconnect_all()
+print('{"status": "end"}')
+

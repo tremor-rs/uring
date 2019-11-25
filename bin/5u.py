@@ -40,13 +40,11 @@ async def wss_loop(wss, path):
         args = await wss.recv()
         cmd = args.split()
         if cmd[0] == 'pause':
-            print('got pause')
             for server in cluster.servers:
                 if server.id == cmd[1]:
                     print(f'Server {server.id} pause')
                     subprocess.run(["kill", "-STOP", f"{server.pid()}"])
         if cmd[0] == 'resume':
-            print('got resume')
             for server in cluster.servers:
                 if server.id == cmd[1]:
                     print(f'Server {server.id} resume')
