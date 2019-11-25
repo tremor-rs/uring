@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use super::*;
+use crate::network::TryNextError;
 use crate::service::Service;
 use crate::storage::*;
-use crossbeam_channel::TryRecvError;
 use protobuf::Message as PBMessage;
 use raft::eraftpb::ConfState;
 use raft::eraftpb::Message;
 use raft::{prelude::*, Error, Result, StateRole};
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -132,130 +132,109 @@ where
     pub fn pubsub(&self) -> &pubsub::Channel {
         &self.pubsub
     }
-    pub fn tick(&mut self) -> Result<()> {
+    pub async fn node_loop(&mut self) -> Result<()> {
+        let mut ticks = async_std::stream::interval(self.tick_duration);
+
         loop {
-            match self.network.try_recv() {
-                Ok(RaftNetworkMsg::Status(reply)) => {
-                    info!(self.logger, "Getting node status");
-                    reply.send(self.status().unwrap()).unwrap();
-                }
-                Ok(RaftNetworkMsg::Event(eid, sid, data)) => {
-                    if let Some(service) = self.services.get_mut(&sid) {
-                        if service.is_local(&data).unwrap() {
-                            let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
-                            let value = service.execute(store, &self.pubsub, data).unwrap();
-                            self.network.event_reply(eid, value).unwrap();
-                        } else {
-                            let pid = self.next_pid();
-                            let from = self.id;
-                            if let Err(e) = self.propose_event(from, pid, sid, eid, data) {
-                                error!(self.logger, "Post forward error: {}", e);
-                                self.network.event_reply(eid, None).unwrap();
+            select! {
+                msg = self.network.next().fuse() => {
+                    let msg = if let Some(msg) = msg {
+                        msg
+                    } else {
+                        break;
+                    };
+                    match msg {
+                        RaftNetworkMsg::Status(reply) => {
+                            info!(self.logger, "Getting node status");
+                            reply.unbounded_send(self.status().unwrap()).unwrap();
+                        }
+                        RaftNetworkMsg::Event(eid, sid, data) => {
+                            if let Some(service) = self.services.get_mut(&sid) {
+                                if service.is_local(&data).unwrap() {
+                                    let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
+                                    let value = service.execute(store, &self.pubsub, data).await.unwrap();
+                                    self.network.event_reply(eid, value).await.unwrap();
+                                } else {
+                                    let pid = self.next_pid();
+                                    let from = self.id;
+                                    if let Err(e) = self.propose_event(from, pid, sid, eid, data).await {
+                                        error!(self.logger, "Post forward error: {}", e);
+                                        self.network.event_reply(eid, None).await.unwrap();
+                                    } else {
+                                        self.pending_acks.insert(pid, eid);
+                                    }
+                                }
                             } else {
-                                self.pending_acks.insert(pid, eid);
+                                error!(self.logger, "Unknown Service: {}", sid);
+                                self.network.event_reply(eid, None).await.unwrap();
                             }
                         }
-                    } else {
-                        error!(self.logger, "Unknown Service: {}", sid);
-                        self.network.event_reply(eid, None).unwrap();
-                    }
-                }
-                Ok(RaftNetworkMsg::GetNode(id, reply)) => {
-                    info!(self.logger, "Getting node status"; "id" => id);
-                    reply.send(self.node_known(id)).unwrap();
-                }
-                Ok(RaftNetworkMsg::AddNode(id, reply)) => {
-                    info!(self.logger, "Adding node"; "id" => id);
-                    reply.send(self.add_node(id)).unwrap();
-                }
-                /*
-                Ok(RaftNetworkMsg::Get(eid, scope, key)) => {
-                    let value = self.get_key(scope, &key);
-                    info!(self.logger, "Reading key"; "key" => String::from_utf8(key).ok());
-                    self.network.event_reply(eid, value).unwrap();
-                }
-                Ok(RaftNetworkMsg::Post(eid, scope, key, value)) => {
-                    let pid = self.next_pid();
-                    let from = self.id;
-                    if let Err(e) = self.propose_kv(from, pid, scope, key, value) {
-                        error!(self.logger, "Post forward error: {}", e);
-                        self.network.event_reply(eid, None).unwrap();
-                    } else {
-                        self.pending_acks.insert(pid, eid);
-                    }
+                        RaftNetworkMsg::GetNode(id, reply) => {
+                            info!(self.logger, "Getting node status"; "id" => id);
+                            reply.unbounded_send(self.node_known(id)).unwrap();
+                        }
+                        RaftNetworkMsg::AddNode(id, reply) => {
+                            info!(self.logger, "Adding node"; "id" => id);
+                            reply.unbounded_send(self.add_node(id)).unwrap();
+                        }
+                        RaftNetworkMsg::AckProposal(pid, success) => {
+                            info!(self.logger, "proposal acknowledged"; "pid" => pid);
+                            if let Some(proposal) = self.pending_proposals.remove(&pid) {
+                                if !success {
+                                    self.proposals.push_back(proposal)
+                                }
+                            }
+                            if let Some(eid) = self.pending_acks.remove(&pid) {
+                                self.network.event_reply(eid, Some(vec![])).await.unwrap();
+                            }
+                        }
+                        RaftNetworkMsg::ForwardProposal(from, pid, sid, data) => {
+                            if let Err(e) = self.propose_event(from, pid, sid, EventId(0), data).await {
+                                error!(self.logger, "Proposal forward error: {}", e);
+                            }
+                        }
 
-                }
-                */
-                Ok(RaftNetworkMsg::AckProposal(pid, success)) => {
-                    info!(self.logger, "proposal acknowledged"; "pid" => pid);
-                    if let Some(proposal) = self.pending_proposals.remove(&pid) {
-                        if !success {
-                            self.proposals.push_back(proposal)
+                        // RAFT
+                        RaftNetworkMsg::RaftMsg(msg) => {
+                            if let Err(e) = self.step(msg).await {
+                                error!(self.logger, "step error"; "error" => format!("{}", e));
+                            }
                         }
                     }
-                    if let Some(eid) = self.pending_acks.remove(&pid) {
-                        self.network.event_reply(eid, Some(vec![])).unwrap();
+                },
+                tick = ticks.next().fuse() => {
+                    if !self.is_running() {
+                        continue
                     }
-                }
-                Ok(RaftNetworkMsg::ForwardProposal(from, pid, sid, data)) => {
-                    if let Err(e) = self.propose_event(from, pid, sid, EventId(0), data) {
-                        error!(self.logger, "Proposal forward error: {}", e);
+                    let this_state = self.role();
+                    if this_state != &self.last_state {
+                        let prev_state = format!("{:?}", self.last_state);
+                        let next_state = format!("{:?}", this_state);
+                        debug!(&self.logger, "State transition"; "last-state" => prev_state.clone(), "next-state" => next_state.clone());
+                        self.pubsub
+                            .unbounded_send(pubsub::Msg::new(
+                                "uring",
+                                PSURing::StateChange {
+                                    prev_state,
+                                    next_state,
+                                    node: self.id,
+                                },
+                            ))
+                            .unwrap();
+                        self.last_state = this_state.clone();
                     }
-                }
-
-                // RAFT
-                Ok(RaftNetworkMsg::RaftMsg(msg)) => {
-                    if let Err(e) = self.step(msg) {
-                        error!(self.logger, "step error"; "error" => format!("{}", e));
+                    self.raft_group.as_mut().unwrap().tick();
+                    self.on_ready().await.unwrap();
+                    if self.is_leader() {
+                        // Handle new proposals.
+                        self.propose_all().await?;
                     }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    return Err(Error::Io(IoError::new(
-                        IoErrorKind::ConnectionAborted,
-                        format!("Network disconnected"),
-                    )))
                 }
             }
         }
-        if !self.is_running() {
-            return Ok(());
-        }
-
-        let this_state = self.role();
-
-        if this_state != &self.last_state {
-            let prev_state = format!("{:?}", self.last_state);
-            let next_state = format!("{:?}", this_state);
-            debug!(&self.logger, "State transition"; "last-state" => prev_state.clone(), "next-state" => next_state.clone());
-            self.pubsub
-                .send(pubsub::Msg::new(
-                    "uring",
-                    PSURing::StateChange {
-                        prev_state,
-                        next_state,
-                        node: self.id,
-                    },
-                ))
-                .unwrap();
-            self.last_state = this_state.clone();
-        }
-
-        if self.timer.elapsed() >= self.tick_duration {
-            // Tick the raft.
-
-            self.raft_group.as_mut().unwrap().tick();
-            self.timer = Instant::now();
-        }
-
-        if self.is_leader() {
-            // Handle new proposals.
-            self.propose_all()?;
-        }
-
-        self.on_ready()
+        Ok(())
     }
-    pub fn propose_event(
+    pub async fn propose_event(
         &mut self,
         from: NodeId,
         pid: ProposalId,
@@ -264,7 +243,7 @@ where
         data: Vec<u8>,
     ) -> Result<()> {
         self.pubsub
-            .send(pubsub::Msg::new(
+            .unbounded_send(pubsub::Msg::new(
                 "uring",
                 PSURing::ProposalReceived {
                     from,
@@ -282,6 +261,7 @@ where
         } else {
             self.network
                 .forward_proposal(from, self.leader(), pid, sid, data)
+                .await
                 .map_err(|e| {
                     Error::Io(IoError::new(
                         IoErrorKind::ConnectionAborted,
@@ -294,7 +274,7 @@ where
     pub fn add_node(&mut self, id: NodeId) -> bool {
         if self.is_leader() && !self.node_known(id) {
             self.pubsub
-                .send(pubsub::Msg::new(
+                .unbounded_send(pubsub::Msg::new(
                     "uring",
                     PSURing::AddNode {
                         new_node: id,
@@ -402,7 +382,7 @@ where
     }
 
     // Create a raft leader only with itself in its configuration.
-    pub fn create_raft_leader(
+    pub async fn create_raft_leader(
         logger: &Logger,
         id: NodeId,
         pubsub: pubsub::Channel,
@@ -411,7 +391,7 @@ where
         let mut cfg = example_config();
         cfg.id = id.0;
 
-        let storage = Storage::new_with_conf_state(id, ConfState::from((vec![id.0], vec![])));
+        let storage = Storage::new_with_conf_state(id, ConfState::from((vec![id.0], vec![]))).await;
         let raft_group = Some(RawNode::new(&cfg, storage, logger).unwrap());
         Self {
             logger: logger.clone(),
@@ -435,13 +415,13 @@ where
     }
 
     // Create a raft follower.
-    pub fn create_raft_follower(
+    pub async fn create_raft_follower(
         logger: &Logger,
         id: NodeId,
         pubsub: pubsub::Channel,
         network: Network,
     ) -> Self {
-        let storage = Storage::new(id);
+        let storage = Storage::new(id).await;
         Self {
             logger: logger.clone(),
             id,
@@ -466,21 +446,21 @@ where
     }
 
     // Initialize raft for followers.
-    pub fn initialize_raft_from_message(&mut self, msg: &Message) {
+    pub async fn initialize_raft_from_message(&mut self, msg: &Message) {
         if !is_initial_msg(msg) {
             return;
         }
         let mut cfg = example_config();
         cfg.id = msg.to;
-        let storage = Storage::new(self.id);
+        let storage = Storage::new(self.id).await;
         self.raft_group = Some(RawNode::new(&cfg, storage, &self.logger).unwrap());
     }
 
     // Step a raft message, initialize the raft if need.
-    pub fn step(&mut self, msg: Message) -> Result<()> {
+    pub async fn step(&mut self, msg: Message) -> Result<()> {
         if self.raft_group.is_none() {
             if is_initial_msg(&msg) {
-                self.initialize_raft_from_message(&msg);
+                self.initialize_raft_from_message(&msg).await;
             } else {
                 return Ok(());
             }
@@ -488,7 +468,7 @@ where
         let raft_group = self.raft_group.as_mut().unwrap();
         raft_group.step(msg)
     }
-    fn append(&self, entries: &[Entry]) -> Result<()> {
+    async fn append(&self, entries: &[Entry]) -> Result<()> {
         self.raft_group
             .as_ref()
             .unwrap()
@@ -496,8 +476,9 @@ where
             .raft_log
             .store
             .append(entries)
+            .await
     }
-    fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
+    async fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         self.raft_group
             .as_mut()
             .unwrap()
@@ -505,10 +486,11 @@ where
             .raft_log
             .store
             .apply_snapshot(snapshot)
+            .await
     }
 
     // interface for raft-rs
-    fn set_conf_state(&mut self, cs: ConfState) -> Result<()> {
+    async fn set_conf_state(&mut self, cs: ConfState) -> Result<()> {
         self.raft_group
             .as_mut()
             .unwrap()
@@ -516,10 +498,11 @@ where
             .raft_log
             .store
             .set_conf_state(cs)
+            .await
     }
 
     // interface for raft-rs
-    fn set_hard_state(&mut self, commit: u64, term: u64) -> Result<()> {
+    async fn set_hard_state(&mut self, commit: u64, term: u64) -> Result<()> {
         self.raft_group
             .as_mut()
             .unwrap()
@@ -527,9 +510,10 @@ where
             .raft_log
             .store
             .set_hard_state(commit, term)
+            .await
     }
 
-    pub(crate) fn on_ready(&mut self) -> Result<()> {
+    pub(crate) async fn on_ready(&mut self) -> Result<()> {
         if self.raft_group.as_ref().is_none() {
             return Ok(());
         };
@@ -543,7 +527,7 @@ where
 
         // Persistent raft logs. It's necessary because in `RawNode::advance` we stabilize
         // raft logs to the latest position.
-        if let Err(e) = self.append(ready.entries()) {
+        if let Err(e) = self.append(ready.entries()).await {
             println!("persist raft log fail: {:?}, need to retry or panic", e);
             return Err(e);
         }
@@ -551,7 +535,7 @@ where
         // Apply the snapshot. It's necessary because in `RawNode::advance` we stabilize the snapshot.
         if *ready.snapshot() != Snapshot::default() {
             let s = ready.snapshot().clone();
-            if let Err(e) = self.apply_snapshot(s) {
+            if let Err(e) = self.apply_snapshot(s).await {
                 println!("apply snapshot fail: {:?}, need to retry or panic", e);
                 return Err(e);
             }
@@ -559,7 +543,7 @@ where
 
         // Send out the messages come from the node.
         for msg in ready.messages.drain(..) {
-            self.network.send_msg(msg).unwrap()
+            self.network.send_msg(msg).await.unwrap()
         }
 
         // Apply all committed proposals.
@@ -581,16 +565,19 @@ where
                         .unwrap()
                         .apply_conf_change(&cc)
                         .unwrap();
-                    self.set_conf_state(cs)?;
+                    self.set_conf_state(cs).await?;
                 } else {
                     // For normal proposals, extract the key-value pair and then
                     // insert them into the kv engine.
                     if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
                         if let Some(service) = self.services.get_mut(&event.sid) {
                             let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
-                            let value = service.execute(store, &self.pubsub, event.data).unwrap();
+                            let value = service
+                                .execute(store, &self.pubsub, event.data)
+                                .await
+                                .unwrap();
                             if event.eid.0 != 0 {
-                                self.network.event_reply(event.eid, value).unwrap();
+                                self.network.event_reply(event.eid, value).await.unwrap();
                             }
                         }
                     }
@@ -602,13 +589,14 @@ where
                         if proposal.proposer == self.id {
                             info!(self.logger, "Handling proposal(local)"; "proposal-id" => proposal.id);
                             if let Some(eid) = self.pending_acks.remove(&proposal.id) {
-                                self.network.event_reply(eid, Some(vec![])).unwrap();
+                                self.network.event_reply(eid, Some(vec![])).await.unwrap();
                             }
                             self.pending_proposals.remove(&proposal.id);
                         } else {
                             info!(self.logger, "Handling proposal(remote)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
                             self.network
                                 .ack_proposal(proposal.proposer, proposal.id, true)
+                                .await
                                 .map_err(|e| {
                                     Error::Io(IoError::new(
                                         IoErrorKind::ConnectionAborted,
@@ -620,7 +608,8 @@ where
                 }
             }
             if let Some(last_committed) = committed_entries.last() {
-                self.set_hard_state(last_committed.index, last_committed.term)?;
+                self.set_hard_state(last_committed.index, last_committed.term)
+                    .await?;
             }
         }
         // Call `RawNode::advance` interface to update position flags in the raft.
@@ -628,7 +617,7 @@ where
         Ok(())
     }
 
-    pub(crate) fn propose_all(&mut self) -> Result<()> {
+    pub(crate) async fn propose_all(&mut self) -> Result<()> {
         let raft_group = self.raft_group.as_mut().unwrap();
         let mut pending = Vec::new();
         for p in self.proposals.iter_mut().skip_while(|p| p.proposed > 0) {
@@ -640,6 +629,7 @@ where
                 } else {
                     self.network
                         .ack_proposal(p.proposer, p.id, false)
+                        .await
                         .map_err(|e| {
                             Error::Io(IoError::new(
                                 IoErrorKind::ConnectionAborted,

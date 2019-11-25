@@ -13,7 +13,7 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use uring_common::*;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]

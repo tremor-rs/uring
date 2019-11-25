@@ -15,9 +15,10 @@
 pub mod placement;
 use super::*;
 use crate::{pubsub, storage, ServiceId};
+use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::BufMut;
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::marker::PhantomData;
 use uring_common::{MRingNodes, Relocations};
@@ -77,32 +78,37 @@ impl<Placement> Service<Placement>
 where
     Placement: placement::Placement,
 {
-    fn size<Storage>(&self, storage: &Storage) -> Option<u64>
+    async fn size<Storage>(&self, storage: &Storage) -> Option<u64>
     where
         Storage: storage::Storage,
     {
-        storage.get(mring::ID.0 as u16, RING_SIZE).and_then(|v| {
-            let mut rdr = Cursor::new(v);
-            rdr.read_u64::<BigEndian>().ok()
-        })
+        storage
+            .get(mring::ID.0 as u16, RING_SIZE)
+            .await
+            .and_then(|v| {
+                let mut rdr = Cursor::new(v);
+                rdr.read_u64::<BigEndian>().ok()
+            })
     }
 
-    fn nodes<Storage>(&self, storage: &Storage) -> Option<MRingNodes>
+    async fn nodes<Storage>(&self, storage: &Storage) -> Option<MRingNodes>
     where
         Storage: storage::Storage,
     {
         storage
             .get(mring::ID.0 as u16, NODES)
+            .await
             .and_then(|v| serde_json::from_slice(&v).ok())
     }
 }
 
+#[async_trait]
 impl<Storage, Placement> super::Service<Storage> for Service<Placement>
 where
-    Storage: storage::Storage,
-    Placement: placement::Placement,
+    Storage: storage::Storage + Sync,
+    Placement: placement::Placement + Send + Sync,
 {
-    fn execute(
+    async fn execute(
         &mut self,
         storage: &Storage,
         pubsub: &pubsub::Channel,
@@ -111,9 +117,10 @@ where
         match serde_json::from_slice(&event) {
             Ok(Event::GetSize) => Ok(self
                 .size(storage)
+                .await
                 .and_then(|size| serde_json::to_vec(&serde_json::Value::from(size)).ok())),
             Ok(Event::SetSize { size }) => {
-                let size = if let Some(size) = self.size(storage) {
+                let size = if let Some(size) = self.size(storage).await {
                     size
                 } else {
                     let mut data = vec![0; 8];
@@ -126,7 +133,7 @@ where
                 };
 
                 pubsub
-                    .send(pubsub::Msg::new(
+                    .unbounded_send(pubsub::Msg::new(
                         "mring",
                         PSMRing::SetSize {
                             size,
@@ -137,17 +144,17 @@ where
 
                 Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
             }
-            Ok(Event::GetNodes) => Ok(storage.get(mring::ID.0 as u16, NODES)),
+            Ok(Event::GetNodes) => Ok(storage.get(mring::ID.0 as u16, NODES).await),
             Ok(Event::AddNode { node }) => {
-                let size = if let Some(size) = self.size(storage) {
+                let size = if let Some(size) = self.size(storage).await {
                     size
                 } else {
                     return Ok(None);
                 };
-                let next = if let Some(current) = self.nodes(storage) {
+                let next = if let Some(current) = self.nodes(storage).await {
                     let (next, relocations) = Placement::add_node(size, current, node.clone());
                     pubsub
-                        .send(pubsub::Msg::new(
+                        .unbounded_send(pubsub::Msg::new(
                             "mring",
                             PSMRing::NodeAdded {
                                 node,
@@ -162,7 +169,7 @@ where
                     let next = Placement::new(size, node.clone());
 
                     pubsub
-                        .send(pubsub::Msg::new(
+                        .unbounded_send(pubsub::Msg::new(
                             "mring",
                             PSMRing::NodeAdded {
                                 node,
@@ -179,16 +186,16 @@ where
                 Ok(Some(next))
             }
             Ok(Event::RemoveNode { node }) => {
-                let size = if let Some(size) = self.size(storage) {
+                let size = if let Some(size) = self.size(storage).await {
                     size
                 } else {
                     return Ok(None);
                 };
 
-                if let Some(current) = self.nodes(storage) {
+                if let Some(current) = self.nodes(storage).await {
                     let (next, relocations) = Placement::remove_node(size, current, node.clone());
                     pubsub
-                        .send(pubsub::Msg::new(
+                        .unbounded_send(pubsub::Msg::new(
                             "mring",
                             PSMRing::NodeRemoved {
                                 node,

@@ -13,260 +13,189 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 
-use super::server;
+use super::Node;
 use super::*;
 use crate::{NodeId, KV};
-use actix_web::{http::StatusCode, web, Error as ActixError, HttpRequest, HttpResponse};
-use actix_web_actors::ws;
-use crossbeam_channel::bounded;
-use serde::{Deserialize, Serialize};
+use futures::channel::mpsc::unbounded;
+use http::StatusCode;
+use tide::{error::ResultExt, response, App, Context, EndpointResult};
 
-/// do websocket handshake and start `UrSocket` actor
-pub(crate) fn uring_index(
-    r: HttpRequest,
-    stream: web::Payload,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let res = ws::start(server::Connection::new(srv.get_ref().clone()), &r, stream);
-    res
+async fn status(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    cx.state().tx.unbounded_send(UrMsg::Status(tx)).unwrap();
+    rx.next()
+        .await
+        .ok_or(StatusCode::NOT_FOUND.into())
+        .map(response::json)
 }
 
-#[derive(Deserialize)]
-pub struct NoParams {}
-
-pub(crate) fn status(
-    _r: HttpRequest,
-    _params: web::Path<NoParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref().tx.send(UrMsg::Status(tx)).unwrap();
-    if let Some(value) = rx.recv().ok() {
-        Ok(HttpResponse::Ok().json(value))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
-}
-
-#[derive(Deserialize)]
-pub struct GetParams {
-    id: String,
-}
-
-pub(crate) fn get(
-    _r: HttpRequest,
-    params: web::Path<GetParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    let key = params.id.clone();
-    srv.get_ref()
+async fn kv_get(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let key: String = cx.param("id").client_err()?;
+    let id = key.clone().into_bytes();
+    cx.state()
         .tx
-        .send(UrMsg::Get(key.clone().into_bytes(), Reply::Direct(tx)))
+        .unbounded_send(UrMsg::Get(id.clone(), Reply::Direct(tx)))
         .unwrap();
-    if let Some(value) = rx
-        .recv()
-        .ok()
+    rx.next()
+        .await
         .and_then(|v| v)
         .and_then(|v| String::from_utf8(v).ok())
-    {
-        Ok(HttpResponse::Ok().json(KV { key, value }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
+        .ok_or(StatusCode::NOT_FOUND.into())
+        .map(|value| KV { key, value })
+        .map(response::json)
 }
 
-#[derive(Deserialize)]
-pub struct PostParams {
-    id: String,
-}
-
-#[derive(Deserialize)]
-pub struct PostBody {
+#[derive(Deserialize, Debug)]
+struct PostBody {
     value: String,
 }
 
-/// do websocket handshake and start `UrSocket` actor
-pub(crate) fn post(
-    _r: HttpRequest,
-    params: web::Path<PostParams>,
-    body: web::Json<PostBody>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn kv_post(mut cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let key: String = cx.param("id").client_err()?;
+    let id = key.clone().into_bytes();
+    let body: PostBody = cx.body_json().await.client_err()?;
+    info!(cx.state().logger, "POST /kv/{} -> {:?}", key, body);
+
+    cx.state()
         .tx
-        .send(UrMsg::Put(
-            params.id.clone().into_bytes(),
+        .unbounded_send(UrMsg::Put(
+            id,
             body.value.clone().into_bytes(),
             Reply::Direct(tx),
         ))
         .unwrap();
-    if rx.recv().unwrap().is_some() {
-        Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
+    rx.next()
+        .await
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
+        .map(|_| response::json("created"))
+        .map(|mut r| {
+            *r.status_mut() = StatusCode::CREATED;
+            r
+        })
 }
 
 #[derive(Deserialize)]
-pub struct CasBody {
+struct CasBody {
     check: String,
     store: String,
 }
 
-pub(crate) fn cas(
-    _r: HttpRequest,
-    params: web::Path<PostParams>,
-    body: web::Json<CasBody>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn kv_cas(mut cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let id: String = cx.param("id").client_err()?;
+    let id = id.into_bytes();
+    let body: CasBody = cx.body_json().await.client_err()?;
+    cx.state()
         .tx
-        .send(UrMsg::Cas(
-            params.id.clone().into_bytes(),
+        .unbounded_send(UrMsg::Cas(
+            id,
             body.check.clone().into_bytes(),
             body.store.clone().into_bytes(),
             Reply::Direct(tx),
         ))
         .unwrap();
     // FIXME improve status when check fails vs succeeds?
-    if rx.recv().unwrap().is_some() {
-        Ok(HttpResponse::new(StatusCode::from_u16(201).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
+    rx.next()
+        .await
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
+        .map(|_| response::json("created"))
+        .map(|mut r| {
+            *r.status_mut() = StatusCode::CREATED;
+            r
+        })
 }
 
-#[derive(Deserialize)]
-pub struct DeleteParams {
-    id: String,
-}
-
-pub(crate) fn delete(
-    _r: HttpRequest,
-    params: web::Path<DeleteParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    let key = params.id.clone();
-    srv.get_ref()
+async fn kv_delete(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let key: String = cx.param("id").client_err()?;
+    let id = key.clone().into_bytes();
+    cx.state()
         .tx
-        .send(UrMsg::Delete(key.clone().into_bytes(), Reply::Direct(tx)))
+        .unbounded_send(UrMsg::Delete(id.clone(), Reply::Direct(tx)))
         .unwrap();
-    if let Some(value) = rx
-        .recv()
-        .ok()
+    rx.next()
+        .await
         .and_then(|v| v)
         .and_then(|v| String::from_utf8(v).ok())
-    {
-        Ok(HttpResponse::Ok().json(KV { key, value }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
+        .ok_or(StatusCode::NOT_FOUND.into())
+        .map(|value| KV { key, value })
+        .map(response::json)
 }
 
-#[derive(Deserialize)]
-pub struct GetNodeParams {
-    id: NodeId,
-}
-pub(crate) fn get_node(
-    _r: HttpRequest,
-    params: web::Path<GetNodeParams>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn uring_get(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let id: u64 = cx.param("id").client_err()?;
+    cx.state()
         .tx
-        .send(UrMsg::GetNode(params.id, tx))
+        .unbounded_send(UrMsg::GetNode(NodeId(id), tx))
         .unwrap();
-    if rx.recv().unwrap() {
-        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(404).unwrap()))
-    }
+
+    rx.next()
+        .await
+        .ok_or(StatusCode::NOT_FOUND.into())
+        .map(response::json)
 }
 
-pub(crate) fn post_node(
-    _r: HttpRequest,
-    params: web::Path<GetNodeParams>,
-    _body: web::Payload,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn uring_post(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let id: u64 = cx.param("id").client_err()?;
+    cx.state()
         .tx
-        .send(UrMsg::AddNode(params.id, tx))
+        .unbounded_send(UrMsg::AddNode(NodeId(id), tx))
         .unwrap();
-    if rx.recv().unwrap() {
-        Ok(HttpResponse::new(StatusCode::from_u16(200).unwrap()))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
+    rx.next()
+        .await
+        .ok_or(StatusCode::NOT_FOUND.into())
+        .map(response::json)
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct MRingSize {
     size: u64,
 }
-pub(crate) fn get_mring_size(
-    _r: HttpRequest,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn mring_get_size(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    cx.state()
         .tx
-        .send(UrMsg::MRingGetSize(Reply::Direct(tx)))
+        .unbounded_send(UrMsg::MRingGetSize(Reply::Direct(tx)))
         .unwrap();
-    if let Some(size) = rx
-        .recv()
-        .unwrap()
-        .and_then(|data| serde_json::from_slice(&data).ok())
-    {
-        Ok(HttpResponse::Ok().json(MRingSize { size }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
+    rx.next()
+        .await
+        .and_then(|d| d)
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
+        .map(response::json)
 }
 
-pub(crate) fn set_mring_size(
-    _r: HttpRequest,
-    body: web::Json<MRingSize>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn mring_set_size(mut cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let body: MRingSize = cx.body_json().await.client_err()?;
+    cx.state()
         .tx
-        .send(UrMsg::MRingSetSize(body.size, Reply::Direct(tx)))
+        .unbounded_send(UrMsg::MRingSetSize(body.size, Reply::Direct(tx)))
         .unwrap();
-    if let Some(size) = rx
-        .recv()
-        .unwrap()
-        .and_then(|data| serde_json::from_slice(dbg!(&data)).ok())
-    {
-        Ok(HttpResponse::Ok().json(MRingSize { size }))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
+    rx.next()
+        .await
+        .and_then(|d| d)
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
+        .map(response::json)
 }
 
-pub(crate) fn get_mring_nodes(
-    _r: HttpRequest,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn mring_get_nodes(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    cx.state()
         .tx
-        .send(UrMsg::MRingGetNodes(Reply::Direct(tx)))
+        .unbounded_send(UrMsg::MRingGetNodes(Reply::Direct(tx)))
         .unwrap();
-    if let Some(data) = rx.recv().unwrap() {
-        Ok(HttpResponse::Ok()
-            .content_type("application/json")
-            .body(data))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
+    rx.next()
+        .await
+        .and_then(|d| d)
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
+        .map(response::json)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -274,21 +203,51 @@ pub struct MRingNode {
     node: String,
 }
 
-pub(crate) fn add_mring_node(
-    _r: HttpRequest,
-    body: web::Json<MRingNode>,
-    srv: web::Data<Node>,
-) -> Result<HttpResponse, ActixError> {
-    let (tx, rx) = bounded(1);
-    srv.get_ref()
+async fn mring_add_node(mut cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = unbounded();
+    let body: MRingNode = cx.body_json().await.client_err()?;
+    cx.state()
         .tx
-        .send(UrMsg::MRingAddNode(body.node.clone(), Reply::Direct(tx)))
+        .unbounded_send(UrMsg::MRingAddNode(body.node.clone(), Reply::Direct(tx)))
         .unwrap();
-    if let Some(data) = rx.recv().unwrap() {
-        Ok(HttpResponse::Ok()
-            .content_type("application/json")
-            .body(data))
-    } else {
-        Ok(HttpResponse::new(StatusCode::from_u16(500).unwrap()))
-    }
+    rx.next()
+        .await
+        .and_then(|d| d)
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
+        .map(response::json)
+}
+
+pub(crate) async fn run(logger: Logger, node: Node, addr: String) -> std::io::Result<()> {
+    use async_std::net::{SocketAddr, ToSocketAddrs};
+    let addr: SocketAddr = addr
+        .to_socket_addrs()
+        .await
+        .expect("Not a valid address")
+        .next()
+        .expect("Not a socket address");
+
+    let mut app = App::with_state(node);
+
+    app.at("/status").get(status);
+    app.at("/kv/:id")
+        .get(kv_get)
+        .post(kv_post)
+        .delete(kv_delete)
+        .at("/cas")
+        .post(kv_cas);
+    app.at("/uring/:id").get(uring_get).post(uring_post);
+    app.at("/mring")
+        .get(mring_get_size)
+        .post(mring_set_size)
+        .at("/node")
+        .post(mring_get_nodes)
+        .post(mring_add_node);
+    info!(logger, "Starting server on {}", addr);
+
+    std::thread::spawn(move || {
+        error!(logger, "Starting server tread for {}", addr);
+        app.serve(addr).unwrap();
+    });
+    Ok(())
 }

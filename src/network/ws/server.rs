@@ -13,257 +13,189 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 
-use super::Reply;
+use super::Reply as WsReply;
 use super::*;
 use crate::{pubsub, NodeId};
-use actix::prelude::*;
-use actix_web_actors::ws;
-use serde::Serialize;
+use async_std::net::{SocketAddr, ToSocketAddrs};
+use async_std::net::{TcpListener, TcpStream};
+use async_std::task;
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::io::{AsyncRead, AsyncWrite};
+use futures::select;
+use futures::StreamExt;
+use std::io::Error;
+use tungstenite::protocol::Message;
 use ws_proto::*;
-
-#[derive(Message, Serialize)]
-pub(crate) struct WsReply(pub ws_proto::Reply);
 
 /// websocket connection is long running connection, it easier
 /// to handle with an actor
 pub(crate) struct Connection {
-    /// Client must send ping at least once per 10 seconds (CLIENT_TIMEOUT),
-    /// otherwise we drop connection.
-    hb: Instant,
     node: Node,
     remote_id: NodeId,
     protocol: Option<Protocol>,
-}
-
-impl Actor for Connection {
-    type Context = ws::WebsocketContext<Self>;
-
-    /// Method is called on actor start. We start the heartbeat process here.
-    fn started(&mut self, ctx: &mut Self::Context) {
-        self.hb(ctx);
-    }
-
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        self.node
-            .tx
-            .send(UrMsg::DownRemote(self.remote_id))
-            .unwrap();
-    }
-}
-
-/// Handler for `ws::Message`
-/// Handler for `ws::Message`
-impl StreamHandler<ws::Message, ws::ProtocolError> for Connection {
-    fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
-        match self.protocol {
-            None => self.handle_initial(msg, ctx),
-            Some(Protocol::KV) => self.handle_kv(msg, ctx),
-            Some(Protocol::URing) => self.handle_uring(msg, ctx),
-            Some(Protocol::MRing) => self.handle_mring(msg, ctx),
-        }
-    }
-}
-
-impl StreamHandler<SubscriberMsg, pubsub::Error> for Connection {
-    fn handle(&mut self, msg: SubscriberMsg, ctx: &mut Self::Context) {
-        ctx.text(serde_json::to_string(&msg).unwrap());
-    }
-}
-
-impl Handler<WsReply> for Connection {
-    type Result = ();
-    fn handle(&mut self, msg: WsReply, ctx: &mut Self::Context) {
-        match self.protocol {
-            None => ctx.text(serde_json::to_string(&msg).unwrap()),
-            Some(Protocol::KV) => ctx.text(serde_json::to_string(&msg).unwrap()),
-            Some(Protocol::MRing) => ctx.text(serde_json::to_string(&msg).unwrap()),
-            Some(Protocol::URing) => ctx.stop(),
-        }
-    }
-}
-
-/// Handle stdin commands
-impl Handler<WsMessage> for Connection {
-    type Result = ();
-
-    fn handle(&mut self, msg: WsMessage, ctx: &mut Self::Context) {
-        match msg {
-            WsMessage::Msg(data) => ctx.text(serde_json::to_string(&data).unwrap()),
-        }
-    }
-}
-
-/// Handle stdin commands
-impl Handler<RaftMsg> for Connection {
-    type Result = ();
-    fn handle(&mut self, msg: RaftMsg, ctx: &mut Self::Context) {
-        ctx.binary(encode_ws(msg));
-    }
+    rx: UnboundedReceiver<Message>,
+    tx: UnboundedSender<Message>,
+    ws_rx: UnboundedReceiver<WsMessage>,
+    ws_tx: UnboundedSender<WsMessage>,
+    ps_rx: UnboundedReceiver<SubscriberMsg>,
+    ps_tx: UnboundedSender<SubscriberMsg>,
 }
 
 impl Connection {
-    pub(crate) fn new(node: Node) -> Self {
+    pub(crate) fn new(
+        node: Node,
+        rx: UnboundedReceiver<Message>,
+        tx: UnboundedSender<Message>,
+    ) -> Self {
+        let (ps_tx, ps_rx) = unbounded();
+        let (ws_tx, ws_rx) = unbounded();
         Self {
-            hb: Instant::now(),
             node,
             remote_id: NodeId(0),
             protocol: None,
+            rx,
+            tx,
+            ps_tx,
+            ps_rx,
+            ws_tx,
+            ws_rx,
         }
     }
 
-    fn handle_initial(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
-        match msg {
-            ws::Message::Ping(msg) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
-            }
-            ws::Message::Pong(_) => {
-                self.hb = Instant::now();
-            }
-            ws::Message::Text(text) => {
-                match serde_json::from_str(&text) {
-                    Ok(ProtocolSelect::Select { rid, protocol }) => {
-                        self.protocol = Some(protocol);
-                        ctx.text(
+    fn handle_initial(&mut self, msg: Message) -> bool {
+        if msg.is_text() {
+            let text = msg.into_data();
+            match serde_json::from_slice(&text) {
+                Ok(ProtocolSelect::Select { rid, protocol }) => {
+                    self.protocol = Some(protocol);
+                    self.tx
+                        .unbounded_send(Message::Text(
                             serde_json::to_string(&ProtocolSelect::Selected { rid, protocol })
                                 .unwrap(),
-                        );
-                    }
-                    Ok(ProtocolSelect::Selected { .. }) => {
-                        ctx.stop();
-                    }
-                    Ok(ProtocolSelect::As { protocol, cmd }) => match protocol {
-                        Protocol::KV => {
-                            self.handle_kv_msg(serde_json::from_value(cmd).unwrap(), ctx)
-                        }
-                        _ => ctx.stop(),
-                    },
-                    Ok(ProtocolSelect::Subscribe { channel }) => {
-                        let (tx, rx) = bounded(10);
-                        self.node
-                            .pubsub
-                            .send(pubsub::Msg::Subscribe { channel, tx })
-                            .unwrap();
-
-                        let stream = pubsub::Stream::new(rx);
-                        Self::add_stream(stream, ctx);
-                    }
-                    Err(e) => error!(
-                        self.node.logger,
-                        "Failed to decode ProtocolSelect message: {} => {}", e, text
-                    ),
+                        ))
+                        .is_ok()
                 }
-
-                //ctx.text(text)
-            }
-            ws::Message::Binary(_) => {
-                ctx.stop();
-            }
-            ws::Message::Close(_) => {
-                ctx.stop();
-            }
-            ws::Message::Nop => (),
-        }
-    }
-
-    fn handle_uring(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
-        match msg {
-            ws::Message::Ping(msg) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
-            }
-            ws::Message::Pong(_) => {
-                self.hb = Instant::now();
-            }
-            ws::Message::Text(text) => {
-                match serde_json::from_str(&text) {
-                    Ok(CtrlMsg::Hello(id, peer)) => {
-                        self.remote_id = id;
-                        self.node
-                            .tx
-                            .send(UrMsg::RegisterRemote(id, peer, ctx.address()))
-                            .unwrap();
-                    }
-                    Ok(CtrlMsg::AckProposal(pid, success)) => {
-                        self.node.tx.send(UrMsg::AckProposal(pid, success)).unwrap();
-                    }
-                    Ok(CtrlMsg::ForwardProposal(from, pid, key, value)) => {
-                        self.node
-                            .tx
-                            .send(UrMsg::ForwardProposal(from, pid, key, value))
-                            .unwrap();
-                    }
-                    Ok(_) => (),
-                    Err(e) => error!(
+                Ok(ProtocolSelect::Selected { .. }) => false,
+                Ok(ProtocolSelect::As { protocol, cmd }) => match protocol {
+                    Protocol::KV => self.handle_kv_msg(serde_json::from_value(cmd).unwrap()),
+                    _ => false,
+                },
+                Ok(ProtocolSelect::Subscribe { channel }) => self
+                    .node
+                    .pubsub
+                    .unbounded_send(pubsub::Msg::Subscribe {
+                        channel,
+                        tx: self.ps_tx.clone(),
+                    })
+                    .is_ok(),
+                Err(e) => {
+                    error!(
                         self.node.logger,
-                        "Failed to decode CtrlMsg message: {} => {}", e, text
-                    ),
+                        "Failed to decode ProtocolSelect message: {} => {}",
+                        e,
+                        String::from_utf8(text).unwrap_or_default()
+                    );
+                    true
                 }
-                //ctx.text(text)
             }
-            ws::Message::Binary(bin) => {
-                let msg = decode_ws(&bin);
-                self.node.tx.send(UrMsg::RaftMsg(msg)).unwrap();
-            }
-            ws::Message::Close(_) => {
-                ctx.stop();
-            }
-            ws::Message::Nop => (),
+        } else {
+            true
         }
     }
 
-    fn handle_kv(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
-        match msg {
-            ws::Message::Ping(msg) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
+    fn handle_uring(&mut self, msg: Message) -> bool {
+        if msg.is_text() {
+            let text = msg.into_data();
+            match serde_json::from_slice(&text) {
+                Ok(CtrlMsg::Hello(id, peer)) => {
+                    self.remote_id = id;
+                    self.node
+                        .tx
+                        .unbounded_send(UrMsg::RegisterRemote(id, peer, self.ws_tx.clone()))
+                        .is_ok()
+                }
+                Ok(CtrlMsg::AckProposal(pid, success)) => self
+                    .node
+                    .tx
+                    .unbounded_send(UrMsg::AckProposal(pid, success))
+                    .is_ok(),
+                Ok(CtrlMsg::ForwardProposal(from, pid, key, value)) => self
+                    .node
+                    .tx
+                    .unbounded_send(UrMsg::ForwardProposal(from, pid, key, value))
+                    .is_ok(),
+                Ok(_) => true,
+                Err(e) => {
+                    error!(
+                        self.node.logger,
+                        "Failed to decode CtrlMsg message: {} => {}",
+                        e,
+                        String::from_utf8(text).unwrap_or_default()
+                    );
+                    true
+                }
             }
-            ws::Message::Pong(_) => {
-                self.hb = Instant::now();
-            }
-            ws::Message::Text(text) => match serde_json::from_str(&text) {
-                Ok(msg) => self.handle_kv_msg(msg, ctx),
-                Err(e) => error!(
-                    self.node.logger,
-                    "Failed to decode KVRequest message: {} => {}", e, text
-                ),
-            },
-            ws::Message::Binary(_) => {
-                ctx.stop();
-            }
-            ws::Message::Close(_) => {
-                ctx.stop();
-            }
-            ws::Message::Nop => (),
+        } else if msg.is_binary() {
+            let bin = msg.into_data();
+            let msg = decode_ws(&bin);
+            self.node.tx.unbounded_send(UrMsg::RaftMsg(msg)).is_ok()
+        } else {
+            true
         }
     }
 
-    fn handle_kv_msg(&mut self, msg: KVRequest, ctx: &mut ws::WebsocketContext<Self>) {
+    fn handle_kv(&mut self, msg: Message) -> bool {
+        if msg.is_text() {
+            let text = msg.into_data();
+            match serde_json::from_slice(&text) {
+                Ok(msg) => self.handle_kv_msg(msg),
+                Err(e) => {
+                    error!(
+                        self.node.logger,
+                        "Failed to decode KVRequest message: {} => {}",
+                        e,
+                        String::from_utf8(text).unwrap_or_default()
+                    );
+                    true
+                }
+            }
+        } else {
+            true
+        }
+    }
+
+    fn handle_kv_msg(&mut self, msg: KVRequest) -> bool {
         match msg {
             KVRequest::Get { rid, key } => {
                 self.node
                     .tx
-                    .send(UrMsg::Get(key.into_bytes(), Reply::WS(rid, ctx.address())))
+                    .unbounded_send(UrMsg::Get(
+                        key.into_bytes(),
+                        WsReply::WS(rid, self.ws_tx.clone()),
+                    ))
                     .unwrap();
+                true
             }
             KVRequest::Put { rid, key, store } => {
                 self.node
                     .tx
-                    .send(UrMsg::Put(
+                    .unbounded_send(UrMsg::Put(
                         key.into_bytes(),
                         store.into_bytes(),
-                        Reply::WS(rid, ctx.address()),
+                        WsReply::WS(rid, self.ws_tx.clone()),
                     ))
                     .unwrap();
+                true
             }
             KVRequest::Delete { rid, key } => {
                 self.node
                     .tx
-                    .send(UrMsg::Delete(
+                    .unbounded_send(UrMsg::Delete(
                         key.into_bytes(),
-                        Reply::WS(rid, ctx.address()),
+                        WsReply::WS(rid, self.ws_tx.clone()),
                     ))
                     .unwrap();
+                true
             }
             KVRequest::Cas {
                 rid,
@@ -273,100 +205,181 @@ impl Connection {
             } => {
                 self.node
                     .tx
-                    .send(UrMsg::Cas(
+                    .unbounded_send(UrMsg::Cas(
                         key.into_bytes(),
                         check.into_bytes(),
                         store.into_bytes(),
-                        Reply::WS(rid, ctx.address()),
+                        WsReply::WS(rid, self.ws_tx.clone()),
                     ))
                     .unwrap();
+                true
             }
         }
     }
 
-    fn handle_mring(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self>) {
-        match msg {
-            ws::Message::Ping(msg) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
+    fn handle_mring(&mut self, msg: Message) -> bool {
+        if msg.is_text() {
+            let text = msg.into_data();
+            match serde_json::from_slice(&text) {
+                Ok(msg) => self.handle_mring_msg(msg),
+                Err(e) => {
+                    error!(
+                        self.node.logger,
+                        "Failed to decode MRRequest message: {} => {}",
+                        e,
+                        String::from_utf8(text).unwrap_or_default()
+                    );
+                    true
+                }
             }
-            ws::Message::Pong(_) => {
-                self.hb = Instant::now();
-            }
-            ws::Message::Text(text) => match serde_json::from_str(&text) {
-                Ok(msg) => self.handle_mring_msg(msg, ctx),
-                Err(e) => error!(
-                    self.node.logger,
-                    "Failed to decode MRRequest message: {} => {}", e, text
-                ),
-            },
-            ws::Message::Binary(_) => {
-                ctx.stop();
-            }
-            ws::Message::Close(_) => {
-                ctx.stop();
-            }
-            ws::Message::Nop => (),
+        } else {
+            true
         }
     }
 
-    fn handle_mring_msg(&mut self, msg: MRRequest, ctx: &mut ws::WebsocketContext<Self>) {
+    fn handle_mring_msg(&mut self, msg: MRRequest) -> bool {
         match msg {
             MRRequest::GetSize { rid } => {
                 self.node
                     .tx
-                    .send(UrMsg::MRingGetSize(Reply::WS(rid, ctx.address())))
+                    .unbounded_send(UrMsg::MRingGetSize(WsReply::WS(rid, self.ws_tx.clone())))
                     .unwrap();
+                true
             }
 
             MRRequest::SetSize { rid, size } => {
                 self.node
                     .tx
-                    .send(UrMsg::MRingSetSize(size, Reply::WS(rid, ctx.address())))
+                    .unbounded_send(UrMsg::MRingSetSize(
+                        size,
+                        WsReply::WS(rid, self.ws_tx.clone()),
+                    ))
                     .unwrap();
+                true
             }
             MRRequest::GetNodes { rid } => {
                 self.node
                     .tx
-                    .send(UrMsg::MRingGetNodes(Reply::WS(rid, ctx.address())))
+                    .unbounded_send(UrMsg::MRingGetNodes(WsReply::WS(rid, self.ws_tx.clone())))
                     .unwrap();
+                true
             }
             MRRequest::AddNode { rid, node } => {
                 self.node
                     .tx
-                    .send(UrMsg::MRingAddNode(node, Reply::WS(rid, ctx.address())))
+                    .unbounded_send(UrMsg::MRingAddNode(
+                        node,
+                        WsReply::WS(rid, self.ws_tx.clone()),
+                    ))
                     .unwrap();
+                true
             }
             MRRequest::RemoveNode { rid, node } => {
                 self.node
                     .tx
-                    .send(UrMsg::MRingRemoveNode(node, Reply::WS(rid, ctx.address())))
+                    .unbounded_send(UrMsg::MRingRemoveNode(
+                        node,
+                        WsReply::WS(rid, self.ws_tx.clone()),
+                    ))
                     .unwrap();
+                true
             }
         }
     }
 
-    /// helper method that sends ping to client every second.
-    ///
-    /// also this method checks heartbeats from client
-    fn hb(&self, ctx: &mut <Self as Actor>::Context) {
-        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
-            // check client heartbeats
-            if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
-                // heartbeat timed out
-                error!(
-                    act.node.logger,
-                    "Websocket Client heartbeat failed, disconnecting!"
-                );
+    pub async fn msg_loop(mut self, logger: Logger) {
+        loop {
+            let cont = select! {
+                msg = self.rx.next() => {
+                    if let Some(msg) = msg {
+                        match self.protocol {
+                            None => self.handle_initial(msg),
+                            Some(Protocol::KV) => self.handle_kv(msg),
+                            Some(Protocol::URing) => self.handle_uring(msg),
+                            Some(Protocol::MRing) => self.handle_mring(msg),
+                        }
+                    } else {
+                        false
+                    }
 
-                // stop actor
-                ctx.stop();
-
-                // don't try to send a ping
-                return;
+                }
+                msg = self.ws_rx.next() => {
+                    match self.protocol {
+                        None | Some(Protocol::KV) | Some(Protocol::MRing) => match msg {
+                            Some(WsMessage::Ctrl(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
+                            Some(WsMessage::Reply(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
+                            None | Some(WsMessage::Raft(_)) => false,
+                        }
+                        Some(Protocol::URing) => match msg {
+                            Some(WsMessage::Ctrl(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
+                            Some(WsMessage::Raft(msg)) => self.tx.unbounded_send(Message::Binary(encode_ws(msg).to_vec())).is_ok(),
+                            Some(WsMessage::Reply(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
+                            None => false,
+                        },
+                    }
+                }
+                msg = self.ps_rx.next() => {
+                    if let Some(msg) = msg {
+                        self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok()
+                    } else {
+                        false
+                    }
+                }
+            };
+            if !cont {
+                self.node
+                    .tx
+                    .unbounded_send(UrMsg::DownRemote(self.remote_id))
+                    .unwrap();
+                break;
             }
-
-            ctx.ping("");
-        });
+        }
     }
+}
+
+pub(crate) async fn accept_connection<S>(logger: Logger, node: Node, stream: S)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut ws_stream = async_tungstenite::accept_async(stream)
+        .await
+        .expect("Error during the websocket handshake occurred");
+
+    // Create a channel for our stream, which other sockets will use to
+    // send us messages. Then register our address with the stream to send
+    // data to us.
+    let (msg_tx, msg_rx) = futures::channel::mpsc::unbounded();
+    let (response_tx, mut response_rx) = futures::channel::mpsc::unbounded();
+    let c = Connection::new(node, msg_rx, response_tx);
+    task::spawn(c.msg_loop(logger.clone()));
+
+    while let Some(message) = ws_stream.next().await {
+        let message = message.expect("Failed to get request");
+        msg_tx
+            .unbounded_send(message)
+            .expect("Failed to forward request");
+        if let Some(resp) = response_rx.next().await {
+            ws_stream.send(resp).await.expect("Failed to send response");
+        }
+    }
+}
+
+pub(crate) async fn run(logger: Logger, node: Node, addr: String) -> Result<(), Error> {
+    let addr = addr
+        .to_socket_addrs()
+        .await
+        .expect("Not a valid address")
+        .next()
+        .expect("Not a socket address");
+
+    // Create the event loop and TCP listener we'll accept connections on.
+    let try_socket = TcpListener::bind(&addr).await;
+    let listener = try_socket.expect("Failed to bind");
+    info!(logger, "Listening on: {}", addr);
+
+    while let Ok((stream, _)) = listener.accept().await {
+        task::spawn(accept_connection(logger.clone(), node.clone(), stream));
+    }
+
+    Ok(())
 }

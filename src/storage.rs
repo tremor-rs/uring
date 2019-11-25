@@ -15,32 +15,35 @@
 // inspired by https://github.com/LucioFranco/kv/blob/master/src/storage.rs
 
 use crate::{NodeId, KV};
+use async_trait::async_trait;
 use protobuf::Message;
 use raft::prelude::*;
 pub use raft::storage::Storage as ReadStorage;
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
 use std::borrow::Borrow;
 
+#[async_trait]
 pub trait Storage: WriteStorage + ReadStorage {
-    fn new_with_conf_state(id: NodeId, state: ConfState) -> Self;
-    fn new(id: NodeId) -> Self;
+    async fn new_with_conf_state(id: NodeId, state: ConfState) -> Self;
+    async fn new(id: NodeId) -> Self;
 }
 /// The missing storage trait from raft-rs ...
+#[async_trait]
 pub trait WriteStorage {
-    fn append(&self, entries: &[Entry]) -> RaftResult<()>;
-    fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()>;
-    fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()>;
-    fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()>;
-    fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
-    fn put(&self, keyscope: u16, key: &[u8], value: &[u8]);
-    fn cas(
+    async fn append(&self, entries: &[Entry]) -> RaftResult<()>;
+    async fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()>;
+    async fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()>;
+    async fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()>;
+    async fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
+    async fn put(&self, keyscope: u16, key: &[u8], value: &[u8]);
+    async fn cas(
         &self,
         keyscope: u16,
         key: &[u8],
         check_value: &[u8],
         store_value: &[u8],
     ) -> Option<Vec<u8>>;
-    fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
+    async fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
 }
 
 use rocksdb::{Direction, IteratorMode, WriteBatch, DB};
@@ -54,17 +57,18 @@ pub struct URRocksStorage {
     conf_state: Option<ConfState>,
 }
 
+#[async_trait]
 impl Storage for URRocksStorage {
-    fn new_with_conf_state(id: NodeId, state: ConfState) -> Self {
-        let mut db = Self::new(id);
+    async fn new_with_conf_state(id: NodeId, state: ConfState) -> Self {
+        let mut db = Self::new(id).await;
 
-        db.set_conf_state(state).unwrap();
-        db.set_hard_state(1, 1).unwrap();
+        db.set_conf_state(state).await.unwrap();
+        db.set_hard_state(1, 1).await.unwrap();
         db
     }
-    fn new(id: NodeId) -> Self {
+    async fn new(id: NodeId) -> Self {
         let backend = DB::open_default(&format!("raft-rocks-{}", id.0)).unwrap();
-        Self {
+        URRocksStorage {
             backend,
             conf_state: None,
         }
@@ -147,23 +151,24 @@ impl URRocksStorage {
     }
 }
 
+#[async_trait]
 impl WriteStorage for URRocksStorage {
-    fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>> {
+    async fn get(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>> {
         let key = make_data_key(scope, key);
         self.backend.get(key).unwrap().map(|v| v.to_vec())
     }
-    fn put(&self, scope: u16, key: &[u8], value: &[u8]) {
+    async fn put(&self, scope: u16, key: &[u8], value: &[u8]) {
         let key = make_data_key(scope, key);
         self.backend.put(key, value).unwrap();
     }
-    fn cas(
+    async fn cas(
         &self,
         scope: u16,
         key: &[u8],
         check_value: &[u8],
         store_value: &[u8],
     ) -> Option<Vec<u8>> {
-        match self.get(scope, key) {
+        match self.get(scope, key).await {
             None => {
                 //self.put(scope, key, store_value);
                 //true
@@ -183,8 +188,8 @@ impl WriteStorage for URRocksStorage {
             }
         }
     }
-    fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>> {
-        match self.get(scope, key) {
+    async fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>> {
+        match self.get(scope, key).await {
             None => None,
             Some(v) => {
                 let v = v.clone();
@@ -194,7 +199,7 @@ impl WriteStorage for URRocksStorage {
             }
         }
     }
-    fn apply_snapshot(&mut self, mut snapshot: Snapshot) -> RaftResult<()> {
+    async fn apply_snapshot(&mut self, mut snapshot: Snapshot) -> RaftResult<()> {
         let mut meta = snapshot.take_metadata();
         self.apply_data_snapshot(snapshot.take_data());
         let term = meta.term;
@@ -206,14 +211,14 @@ impl WriteStorage for URRocksStorage {
             return Err(RaftError::Store(StorageError::SnapshotOutOfDate));
         }
 
-        self.set_hard_state(index, term)?;
-        self.set_conf_state(meta.take_conf_state())?;
+        self.set_hard_state(index, term).await?;
+        self.set_conf_state(meta.take_conf_state()).await?;
         // From Mem node do we only want to clear up to index?
         self.clear_log();
         Ok(())
     }
 
-    fn append(&self, entries: &[Entry]) -> RaftResult<()> {
+    async fn append(&self, entries: &[Entry]) -> RaftResult<()> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -229,7 +234,7 @@ impl WriteStorage for URRocksStorage {
         Ok(())
     }
 
-    fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()> {
+    async fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()> {
         self.conf_state = Some(cs.clone());
 
         let data = cs.write_to_bytes()?;
@@ -238,7 +243,7 @@ impl WriteStorage for URRocksStorage {
         Ok(())
     }
 
-    fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()> {
+    async fn set_hard_state(&mut self, commit: u64, term: u64) -> RaftResult<()> {
         let mut hs = HardState::new();
         hs.commit = commit;
         hs.term = term;

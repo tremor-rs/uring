@@ -15,9 +15,11 @@
 pub mod ws;
 
 use crate::*;
-use crossbeam_channel::{Sender, TryRecvError};
+use async_trait::async_trait;
+use futures::channel::mpsc::{TryRecvError, UnboundedSender};
 use raft::eraftpb::Message as RaftMessage;
 use std::{fmt, io};
+
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
@@ -32,24 +34,30 @@ impl fmt::Display for Error {
 }
 
 pub enum RaftNetworkMsg {
-    Status(Sender<raft_node::RaftNodeStatus>),
+    Status(UnboundedSender<raft_node::RaftNodeStatus>),
     // Raft related
     AckProposal(ProposalId, bool),
     ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
-    GetNode(NodeId, Sender<bool>),
-    AddNode(NodeId, Sender<bool>),
+    GetNode(NodeId, UnboundedSender<bool>),
+    AddNode(NodeId, UnboundedSender<bool>),
 
     Event(EventId, ServiceId, Vec<u8>),
     RaftMsg(RaftMessage),
 }
 
+pub enum TryNextError {
+    Done,
+    Error(TryRecvError),
+}
+
+#[async_trait]
 pub trait Network {
-    fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError>;
-    fn ack_proposal(&self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error>;
-    fn event_reply(&mut self, id: EventId, reply: Option<Vec<u8>>) -> Result<(), Error>;
-    fn send_msg(&self, msg: RaftMessage) -> Result<(), Error>;
+    async fn next(&mut self) -> Option<RaftNetworkMsg>;
+    async fn ack_proposal(&self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error>;
+    async fn event_reply(&mut self, id: EventId, reply: Option<Vec<u8>>) -> Result<(), Error>;
+    async fn send_msg(&self, msg: RaftMessage) -> Result<(), Error>;
     fn connections(&self) -> Vec<NodeId>;
-    fn forward_proposal(
+    async fn forward_proposal(
         &self,
         from: NodeId,
         to: NodeId,

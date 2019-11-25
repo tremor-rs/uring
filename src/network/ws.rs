@@ -22,33 +22,26 @@ use crate::pubsub;
 use crate::raft_node::RaftNodeStatus;
 use crate::service::{kv, mring};
 use crate::{NodeId, RequestId};
-use actix::prelude::*;
-use actix_web::{middleware, web, App, HttpServer};
+use async_std::task;
+use async_trait::async_trait;
 use bytes::Bytes;
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
-use futures::Future;
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::StreamExt;
 use raft::eraftpb::Message as RaftMessage;
-use serde::{Deserialize, Serialize};
-use server::WsReply;
+use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
 use std::io;
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use ws_proto::Reply as ProtoReply;
 
-type LocalMailboxes = HashMap<NodeId, Addr<client::Connection>>;
-type RemoteMailboxes = HashMap<NodeId, Addr<server::Connection>>;
-
-/// How often heartbeat pings are sent
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-/// How long before lack of client response causes a timeout
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+type LocalMailboxes = HashMap<NodeId, UnboundedSender<WsMessage>>;
+type RemoteMailboxes = HashMap<NodeId, UnboundedSender<WsMessage>>;
 
 #[derive(Clone)]
 pub(crate) struct Node {
     id: NodeId,
-    tx: Sender<UrMsg>,
+    tx: UnboundedSender<UrMsg>,
     logger: Logger,
     pubsub: pubsub::Channel,
 }
@@ -60,15 +53,15 @@ pub struct Network {
     known_peers: HashMap<NodeId, String>,
     endpoint: String,
     logger: Logger,
-    rx: Receiver<UrMsg>,
-    tx: Sender<UrMsg>,
+    rx: UnboundedReceiver<UrMsg>,
+    tx: UnboundedSender<UrMsg>,
     next_eid: u64,
     pending: HashMap<EventId, Reply>,
 }
 
 pub(crate) enum Reply {
-    Direct(Sender<Option<Vec<u8>>>),
-    WS(RequestId, Addr<server::Connection>),
+    Direct(UnboundedSender<Option<Vec<u8>>>),
+    WS(RequestId, UnboundedSender<WsMessage>),
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub enum CtrlMsg {
@@ -80,24 +73,24 @@ pub enum CtrlMsg {
 
 pub(crate) enum UrMsg {
     // Network related
-    InitLocal(Addr<client::Connection>),
+    InitLocal(UnboundedSender<WsMessage>),
     RegisterLocal(
         NodeId,
         String,
-        Addr<client::Connection>,
+        UnboundedSender<WsMessage>,
         Vec<(NodeId, String)>,
     ),
-    RegisterRemote(NodeId, String, Addr<server::Connection>),
+    RegisterRemote(NodeId, String, UnboundedSender<WsMessage>),
     DownLocal(NodeId),
     DownRemote(NodeId),
-    Status(Sender<RaftNodeStatus>),
+    Status(UnboundedSender<RaftNodeStatus>),
 
     // Raft related
     AckProposal(ProposalId, bool),
     ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
     RaftMsg(RaftMessage),
-    GetNode(NodeId, Sender<bool>),
-    AddNode(NodeId, Sender<bool>),
+    GetNode(NodeId, UnboundedSender<bool>),
+    AddNode(NodeId, UnboundedSender<bool>),
 
     // KV related
     Get(Vec<u8>, Reply),
@@ -113,115 +106,119 @@ pub(crate) enum UrMsg {
     MRingRemoveNode(String, Reply),
 }
 
-#[derive(Message)]
-pub(crate) struct RaftMsg(RaftMessage);
-
+#[async_trait]
 impl NetworkTrait for Network {
-    fn event_reply(&mut self, id: EventId, data: Option<Vec<u8>>) -> Result<(), Error> {
+    async fn event_reply(&mut self, id: EventId, data: Option<Vec<u8>>) -> Result<(), Error> {
         match self.pending.remove(&id) {
             Some(Reply::WS(rid, sender)) => sender
-                .send(WsReply(ProtoReply {
-                    rid,
-                    data: data.and_then(|d| serde_json::from_slice(&d).ok()),
-                }))
-                .wait()
+                .unbounded_send(
+                    ProtoReply {
+                        rid,
+                        data: data.and_then(|d| serde_json::from_slice(&d).ok()),
+                    }
+                    .into(),
+                )
                 .unwrap(),
-            Some(Reply::Direct(sender)) => sender.send(data).unwrap(),
+            Some(Reply::Direct(sender)) => sender.unbounded_send(data).unwrap(),
             None => (),
         };
         Ok(())
     }
 
-    fn try_recv(&mut self) -> Result<RaftNetworkMsg, TryRecvError> {
+    async fn next(&mut self) -> Option<RaftNetworkMsg> {
         use RaftNetworkMsg::*;
-        match self.rx.try_recv() {
-            Ok(UrMsg::MRingSetSize(size, reply)) => {
+        let msg = if let Some(msg) = self.rx.next().await {
+            msg
+        } else {
+            return None;
+        };
+        match msg {
+            UrMsg::MRingSetSize(size, reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(
+                Some(RaftNetworkMsg::Event(
                     eid,
                     mring::ID,
                     mring::Event::set_size(size),
                 ))
             }
-            Ok(UrMsg::MRingGetSize(reply)) => {
+            UrMsg::MRingGetSize(reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(
+                Some(RaftNetworkMsg::Event(
                     eid,
                     mring::ID,
                     mring::Event::get_size(),
                 ))
             }
-            Ok(UrMsg::MRingGetNodes(reply)) => {
+            UrMsg::MRingGetNodes(reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(
+                Some(RaftNetworkMsg::Event(
                     eid,
                     mring::ID,
                     mring::Event::get_nodes(),
                 ))
             }
-            Ok(UrMsg::MRingAddNode(node, reply)) => {
+            UrMsg::MRingAddNode(node, reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(
+                Some(RaftNetworkMsg::Event(
                     eid,
                     mring::ID,
                     mring::Event::add_node(node),
                 ))
             }
-            Ok(UrMsg::MRingRemoveNode(node, reply)) => {
+            UrMsg::MRingRemoveNode(node, reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(
+                Some(RaftNetworkMsg::Event(
                     eid,
                     mring::ID,
                     mring::Event::remove_node(node),
                 ))
             }
-            Ok(UrMsg::Status(reply)) => Ok(Status(reply)),
-            Ok(UrMsg::GetNode(id, reply)) => Ok(GetNode(id, reply)),
-            Ok(UrMsg::AddNode(id, reply)) => Ok(AddNode(id, reply)),
-            Ok(UrMsg::Get(key, reply)) => {
+            UrMsg::Status(reply) => Some(Status(reply)),
+            UrMsg::GetNode(id, reply) => Some(GetNode(id, reply)),
+            UrMsg::AddNode(id, reply) => Some(AddNode(id, reply)),
+            UrMsg::Get(key, reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(eid, kv::ID, kv::Event::get(key)))
+                Some(RaftNetworkMsg::Event(eid, kv::ID, kv::Event::get(key)))
             }
-            Ok(UrMsg::Put(key, value, reply)) => {
+            UrMsg::Put(key, value, reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(
+                Some(RaftNetworkMsg::Event(
                     eid,
                     kv::ID,
                     kv::Event::put(key, value),
                 ))
             }
-            Ok(UrMsg::Cas(key, check_value, store_value, reply)) => {
+            UrMsg::Cas(key, check_value, store_value, reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(
+                Some(RaftNetworkMsg::Event(
                     eid,
                     kv::ID,
                     kv::Event::cas(key, check_value, store_value),
                 ))
             }
-            Ok(UrMsg::Delete(key, reply)) => {
+            UrMsg::Delete(key, reply) => {
                 let eid = self.register_reply(reply);
-                Ok(RaftNetworkMsg::Event(eid, kv::ID, kv::Event::delete(key)))
+                Some(RaftNetworkMsg::Event(eid, kv::ID, kv::Event::delete(key)))
             }
-            Ok(UrMsg::AckProposal(pid, success)) => Ok(AckProposal(pid, success)),
-            Ok(UrMsg::ForwardProposal(from, pid, sid, data)) => {
-                Ok(ForwardProposal(from, pid, sid, data))
+            UrMsg::AckProposal(pid, success) => Some(AckProposal(pid, success)),
+            UrMsg::ForwardProposal(from, pid, sid, data) => {
+                Some(ForwardProposal(from, pid, sid, data))
             }
-            Ok(UrMsg::RaftMsg(msg)) => Ok(RaftMsg(msg)),
+            UrMsg::RaftMsg(msg) => Some(RaftMsg(msg)),
             // Connection handling of websocket connections
             // partially based on the problem that actix ws client
             // doens't reconnect
-            Ok(UrMsg::InitLocal(endpoint)) => {
+            UrMsg::InitLocal(endpoint) => {
                 info!(self.logger, "Initializing local endpoint");
                 endpoint
-                    .send(WsMessage::Msg(CtrlMsg::Hello(
+                    .unbounded_send(WsMessage::Ctrl(CtrlMsg::Hello(
                         self.id,
                         self.endpoint.clone(),
                     )))
-                    .wait()
                     .unwrap();
-                self.try_recv()
+                self.next().await
             }
-            Ok(UrMsg::RegisterLocal(id, peer, endpoint, peers)) => {
+            UrMsg::RegisterLocal(id, peer, endpoint, peers) => {
                 if id != self.id {
                     info!(self.logger, "register(local)"; "remote-id" => id, "remote-peer" => peer, "discovered-peers" => format!("{:?}", peers));
                     self.local_mailboxes.insert(id, endpoint.clone());
@@ -230,26 +227,26 @@ impl NetworkTrait for Network {
                             self.known_peers.insert(peer_id, peer.clone());
                             let tx = self.tx.clone();
                             let logger = self.logger.clone();
-                            thread::spawn(move || client::remote_endpoint(peer, tx, logger));
+                            task::spawn(client::remote_endpoint(peer, tx, logger));
                         }
                     }
                 }
-                self.try_recv()
+                self.next().await
             }
 
             // Reply to hello => sends RegisterLocal
-            Ok(UrMsg::RegisterRemote(id, peer, endpoint)) => {
+            UrMsg::RegisterRemote(id, peer, endpoint) => {
                 if id != self.id {
                     info!(self.logger, "register(remote)"; "remote-id" => id, "remote-peer" => &peer);
                     if !self.known_peers.contains_key(&id) {
                         self.known_peers.insert(id, peer.clone());
                         let tx = self.tx.clone();
                         let logger = self.logger.clone();
-                        thread::spawn(move || client::remote_endpoint(peer, tx, logger));
+                        task::spawn(client::remote_endpoint(peer, tx, logger));
                     }
                     endpoint
                         .clone()
-                        .send(WsMessage::Msg(CtrlMsg::HelloAck(
+                        .unbounded_send(WsMessage::Ctrl(CtrlMsg::HelloAck(
                             self.id,
                             self.endpoint.clone(),
                             self.known_peers
@@ -257,41 +254,37 @@ impl NetworkTrait for Network {
                                 .into_iter()
                                 .collect::<Vec<(NodeId, String)>>(),
                         )))
-                        .wait()
                         .unwrap();
                     self.remote_mailboxes.insert(id, endpoint.clone());
                 }
-                self.try_recv()
+                self.next().await
             }
-            Ok(UrMsg::DownLocal(id)) => {
+            UrMsg::DownLocal(id) => {
                 warn!(self.logger, "down(local)"; "id" => id);
                 self.local_mailboxes.remove(&id);
                 if !self.remote_mailboxes.contains_key(&id) {
                     self.known_peers.remove(&id);
                 }
-                self.try_recv()
+                self.next().await
             }
-            Ok(UrMsg::DownRemote(id)) => {
+            UrMsg::DownRemote(id) => {
                 warn!(self.logger, "down(remote)"; "id" => id);
                 self.remote_mailboxes.remove(&id);
                 if !self.local_mailboxes.contains_key(&id) {
                     self.known_peers.remove(&id);
                 }
-                self.try_recv()
+                self.next().await
             }
-            Err(e) => Err(e),
         }
     }
-    fn ack_proposal(&self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error> {
+    async fn ack_proposal(&self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error> {
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
-                .send(WsMessage::Msg(CtrlMsg::AckProposal(pid, success)))
-                .wait()
+                .unbounded_send(WsMessage::Ctrl(CtrlMsg::AckProposal(pid, success)))
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get(&to) {
             remote
-                .send(WsMessage::Msg(CtrlMsg::AckProposal(pid, success)))
-                .wait()
+                .unbounded_send(WsMessage::Ctrl(CtrlMsg::AckProposal(pid, success)))
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else {
             Err(Error::Io(io::Error::new(
@@ -301,17 +294,15 @@ impl NetworkTrait for Network {
         }
     }
 
-    fn send_msg(&self, msg: RaftMessage) -> Result<(), Error> {
+    async fn send_msg(&self, msg: RaftMessage) -> Result<(), Error> {
         let to = NodeId(msg.to);
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
-                .send(RaftMsg(msg))
-                .wait()
+                .unbounded_send(WsMessage::Raft(msg))
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get(&to) {
             remote
-                .send(RaftMsg(msg))
-                .wait()
+                .unbounded_send(WsMessage::Raft(msg))
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else {
             // Err(Error::NotConnected(to)) this is not an error we'll retry
@@ -328,7 +319,7 @@ impl NetworkTrait for Network {
         k1
     }
 
-    fn forward_proposal(
+    async fn forward_proposal(
         &self,
         from: NodeId,
         to: NodeId,
@@ -336,16 +327,14 @@ impl NetworkTrait for Network {
         sid: ServiceId,
         data: Vec<u8>,
     ) -> Result<(), Error> {
-        let msg = WsMessage::Msg(CtrlMsg::ForwardProposal(from, pid, sid, data));
+        let msg = WsMessage::Ctrl(CtrlMsg::ForwardProposal(from, pid, sid, data));
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
-                .send(msg)
-                .wait()
+                .unbounded_send(msg)
                 .map_err(|e| Error::Generic(format!("{}", e)))
         } else if let Some(remote) = self.remote_mailboxes.get(&to) {
             remote
-                .send(msg)
-                .wait()
+                .unbounded_send(msg)
                 .map_err(|e| Error::Generic(format!("{}", e)))
         } else {
             Err(Error::NotConnected(to))
@@ -355,9 +344,28 @@ impl NetworkTrait for Network {
 
 /// do websocket handshake and start `client::Connection` actor
 
-#[derive(Message)]
 pub enum WsMessage {
-    Msg(CtrlMsg),
+    Ctrl(CtrlMsg),
+    Raft(RaftMessage),
+    Reply(ws_proto::Reply),
+}
+
+impl From<CtrlMsg> for WsMessage {
+    fn from(m: CtrlMsg) -> Self {
+        Self::Ctrl(m)
+    }
+}
+
+impl From<RaftMessage> for WsMessage {
+    fn from(m: RaftMessage) -> Self {
+        Self::Raft(m)
+    }
+}
+
+impl From<ws_proto::Reply> for WsMessage {
+    fn from(m: ws_proto::Reply) -> Self {
+        Self::Reply(m)
+    }
 }
 
 #[cfg(feature = "json-proto")]
@@ -375,32 +383,33 @@ fn decode_ws(bin: &[u8]) -> RaftMessage {
 }
 
 #[cfg(feature = "json-proto")]
-fn encode_ws(msg: RaftMsg) -> Bytes {
-    let data: crate::codec::json::Event = msg.0.clone().into();
+fn encode_ws(msg: RaftMessage) -> Bytes {
+    let data: crate::codec::json::Event = msg.clone().into();
     let data = serde_json::to_string_pretty(&data);
     data.unwrap().into()
 }
 
 #[cfg(not(feature = "json-proto"))]
-fn encode_ws(msg: RaftMsg) -> Bytes {
+fn encode_ws(msg: RaftMessage) -> Bytes {
     use protobuf::Message;
-    msg.0.write_to_bytes().unwrap().into()
+    msg.write_to_bytes().unwrap().into()
 }
 
 impl Network {
     pub fn new(
         logger: &Logger,
         id: NodeId,
-        endpoint: &str,
+        ws_endpoint: &str,
+        rest_endpoint: Option<&str>,
         peers: Vec<String>,
-        pubsub: Sender<pubsub::Msg>,
-    ) -> (JoinHandle<Result<(), io::Error>>, Self) {
-        let (tx, rx) = bounded(100);
+        pubsub: pubsub::Channel,
+    ) -> Self {
+        let (tx, rx) = unbounded();
 
         for peer in peers {
             let logger = logger.clone();
             let tx = tx.clone();
-            thread::spawn(move || client::remote_endpoint(peer, tx, logger));
+            task::spawn(client::remote_endpoint(peer, tx, logger));
         }
 
         let node = Node {
@@ -410,64 +419,27 @@ impl Network {
             pubsub,
         };
 
-        let endpoint = endpoint.to_string();
-        let t_endpoint = endpoint.clone();
+        let endpoint = ws_endpoint.to_string();
 
-        let handle = thread::spawn(move || {
-            HttpServer::new(move || {
-                App::new()
-                    .data(node.clone())
-                    // enable logger
-                    .wrap(middleware::Logger::default())
-                    .service(web::resource("/status").route(web::get().to(rest::status)))
-                    .service(
-                        web::resource("/data/{id}")
-                            .route(web::get().to(rest::get))
-                            .route(web::post().to(rest::post))
-                            .route(web::delete().to(rest::delete)),
-                    )
-                    .service(
-                        web::resource("/data/{id}/cas") // FIXME use query param instead
-                            .route(web::post().to(rest::cas)),
-                    )
-                    .service(
-                        web::resource("/node/{id}")
-                            .route(web::get().to(rest::get_node))
-                            .route(web::post().to(rest::post_node)),
-                    )
-                    .service(
-                        web::resource("/mring")
-                            .route(web::get().to(rest::get_mring_size))
-                            .route(web::post().to(rest::set_mring_size)),
-                    )
-                    .service(
-                        web::resource("/mring/node")
-                            .route(web::get().to(rest::get_mring_nodes))
-                            .route(web::post().to(rest::add_mring_node)),
-                    )
-                    // websocket route
-                    .service(web::resource("/uring").route(web::get().to(rest::uring_index)))
-            })
-            // start http server on 127.0.0.1:8080
-            .bind(t_endpoint)?
-            .run()
-        });
+        task::spawn(server::run(logger.clone(), node.clone(), endpoint.clone()));
+        if let Some(rest_endpoint) = rest_endpoint {
+            error!(logger, "ENDPOINT: {}", rest_endpoint);
+            let rest_endpoint = rest_endpoint.to_string();
+            task::spawn(rest::run(logger.clone(), node, rest_endpoint));
+        }
 
-        (
-            handle,
-            Self {
-                id,
-                endpoint,
-                logger: logger.clone(),
-                local_mailboxes: HashMap::new(),
-                remote_mailboxes: HashMap::new(),
-                known_peers: HashMap::new(),
-                rx,
-                tx,
-                next_eid: 1,
-                pending: HashMap::new(),
-            },
-        )
+        Self {
+            id,
+            endpoint,
+            logger: logger.clone(),
+            local_mailboxes: HashMap::new(),
+            remote_mailboxes: HashMap::new(),
+            known_peers: HashMap::new(),
+            rx,
+            tx,
+            next_eid: 1,
+            pending: HashMap::new(),
+        }
     }
     fn register_reply(&mut self, reply: Reply) -> EventId {
         let eid = EventId(self.next_eid);

@@ -15,6 +15,7 @@
 pub mod kv;
 pub mod mring;
 use crate::{pubsub, storage};
+use async_trait::async_trait;
 use std::{fmt, io};
 
 #[derive(Debug)]
@@ -31,11 +32,12 @@ impl fmt::Display for Error {
     }
 }
 
+#[async_trait]
 pub trait Service<Storage>
 where
     Storage: storage::Storage,
 {
-    fn execute(
+    async fn execute(
         &mut self,
         storage: &Storage,
         pubsub: &pubsub::Channel,

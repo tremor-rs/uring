@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "2048"]
+
 mod codec;
 #[allow(unused)]
 pub mod errors;
@@ -26,11 +28,13 @@ use crate::raft_node::*;
 use crate::service::mring::{self, placement::continuous};
 use crate::service::{kv, Service};
 use crate::storage::URRocksStorage;
+use async_std::task;
 use clap::{App as ClApp, Arg};
-use serde::{Deserialize, Serialize};
+use futures::{select, FutureExt, StreamExt};
+use raft::Result as RaftResult;
+use serde_derive::{Deserialize, Serialize};
 use slog::{Drain, Logger};
 use slog_json;
-use std::thread;
 use std::time::{Duration, Instant};
 pub use uring_common::*;
 use ws_proto::PSURing;
@@ -58,7 +62,7 @@ pub struct KVs {
     value: Vec<u8>,
 }
 
-fn raft_loop<N: Network>(
+async fn raft_loop<N: Network>(
     id: NodeId,
     bootstrap: bool,
     ring_size: Option<u64>,
@@ -69,9 +73,9 @@ fn raft_loop<N: Network>(
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut t1 = Instant::now();
     let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
-        RaftNode::create_raft_leader(&logger, id, pubsub, network)
+        RaftNode::create_raft_leader(&logger, id, pubsub, network).await
     } else {
-        RaftNode::create_raft_follower(&logger, id, pubsub, network)
+        RaftNode::create_raft_follower(&logger, id, pubsub, network).await
     };
     node.set_raft_tick_duration(Duration::from_millis(100));
     node.log();
@@ -87,23 +91,13 @@ fn raft_loop<N: Network>(
                     node.pubsub(),
                     service::mring::Event::set_size(size),
                 )
+                .await
                 .unwrap();
         }
     }
     node.add_service(mring::ID, Box::new(vnode));
 
-    loop {
-        thread::sleep(Duration::from_millis(10));
-
-        if t1.elapsed() >= Duration::from_secs(10) {
-            // Tick the raft.
-            node.log();
-            t1 = Instant::now();
-        }
-
-        // Handle readies from the raft.
-        node.tick().unwrap();
-    }
+    node.node_loop().await.unwrap()
 }
 
 fn main() -> std::io::Result<()> {
@@ -133,7 +127,14 @@ fn main() -> std::io::Result<()> {
                 .long("ring-size")
                 .value_name("RING_SIZE")
                 .help("Initialized mring size, only has an effect when used together with --bootstrap")
-                .takes_value(false),
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("http-endpoint")
+                .long("http")
+                .value_name("HTTP")
+                .help("http endpoint to listen to")
+                .takes_value(true),
         )
         .arg(
             Arg::with_name("no-json")
@@ -179,12 +180,19 @@ fn main() -> std::io::Result<()> {
     let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
     let id = NodeId(matches.value_of("id").unwrap_or("1").parse().unwrap());
     let loop_logger = logger.clone();
+    let rest_endpoint = matches.value_of("http-endpoint");
 
-    let (_ps_handle, ps_tx) = pubsub::start(&logger);
+    let ps_tx = pubsub::start(&logger);
 
-    let (handle, network) = ws::Network::new(&logger, id, endpoint, peers, ps_tx.clone());
+    let network = ws::Network::new(&logger, id, endpoint, rest_endpoint, peers, ps_tx.clone());
 
-    thread::spawn(move || raft_loop(id, bootstrap, ring_size, ps_tx, network, loop_logger));
-
-    handle.join().unwrap()
+    task::block_on(raft_loop(
+        id,
+        bootstrap,
+        ring_size,
+        ps_tx,
+        network,
+        loop_logger,
+    ));
+    Ok(())
 }

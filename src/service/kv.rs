@@ -14,7 +14,8 @@
 
 use super::*;
 use crate::{pubsub, storage, ServiceId};
-use serde::{Deserialize, Serialize};
+use async_trait::async_trait;
+use serde_derive::{Deserialize, Serialize};
 
 pub const ID: ServiceId = ServiceId(0);
 
@@ -44,7 +45,6 @@ pub(crate) enum PSEvent {
         old: Option<String>,
     },
 }
-
 pub struct Service {
     scope: u16,
 }
@@ -94,11 +94,12 @@ impl Event {
     }
 }
 
+#[async_trait]
 impl<Storage> super::Service<Storage> for Service
 where
-    Storage: storage::Storage,
+    Storage: storage::Storage + Sync,
 {
-    fn execute(
+    async fn execute(
         &mut self,
         storage: &Storage,
         pubsub: &pubsub::Channel,
@@ -107,11 +108,13 @@ where
         match serde_json::from_slice(&event) {
             Ok(Event::Get { key }) => Ok(storage
                 .get(self.scope, &key)
+                .await
                 .and_then(|v| String::from_utf8(v).ok())
                 .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())),
             Ok(Event::Put { key, value }) => {
                 let old = storage
                     .get(self.scope, &key)
+                    .await
                     .and_then(|value| String::from_utf8(value).ok());
                 storage.put(self.scope, &key, &value);
                 let msg = serde_json::to_value(&PSEvent::Put {
@@ -122,7 +125,7 @@ where
                 })
                 .unwrap();
                 pubsub
-                    .send(pubsub::Msg::Msg {
+                    .unbounded_send(pubsub::Msg::Msg {
                         channel: "kv".into(),
                         msg: msg,
                     })
@@ -134,7 +137,10 @@ where
                 check_value,
                 store_value,
             }) => {
-                if let Some(conflict) = storage.cas(self.scope, &key, &check_value, &store_value) {
+                if let Some(conflict) = storage
+                    .cas(self.scope, &key, &check_value, &store_value)
+                    .await
+                {
                     let conflict = String::from_utf8(conflict).ok();
                     let msg = serde_json::to_value(&PSEvent::CasConflict {
                         scope: self.scope,
@@ -144,7 +150,7 @@ where
                     })
                     .unwrap();
                     pubsub
-                        .send(pubsub::Msg::Msg {
+                        .unbounded_send(pubsub::Msg::Msg {
                             channel: "kv".into(),
                             msg: msg,
                         })
@@ -162,7 +168,7 @@ where
                     })
                     .unwrap();
                     pubsub
-                        .send(pubsub::Msg::Msg {
+                        .unbounded_send(pubsub::Msg::Msg {
                             channel: "kv".into(),
                             msg: msg,
                         })
@@ -172,6 +178,7 @@ where
             }
             Ok(Event::Delete { key }) => Ok(storage
                 .delete(self.scope, &key)
+                .await
                 .and_then(|v| String::from_utf8(v).ok())
                 .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())),
             _ => Err(Error::UnknownEvent),

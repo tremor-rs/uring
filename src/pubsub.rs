@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // use crate::{NodeId, KV};
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
-use futures::{Async, Poll};
+use async_std::task;
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::stream::StreamExt;
 use serde::Serialize;
 use slog::Logger;
 use std::collections::HashMap;
-use std::thread::{self, JoinHandle};
 use ws_proto::SubscriberMsg;
 
-pub type Channel = Sender<Msg>;
+pub type Channel = UnboundedSender<Msg>;
 
 pub enum Msg {
     Subscribe {
         channel: String,
-        tx: Sender<SubscriberMsg>,
+        tx: UnboundedSender<SubscriberMsg>,
     },
     Msg {
         channel: String,
@@ -47,28 +47,9 @@ pub enum Error {
     Disconnected,
 }
 
-pub struct Stream(Receiver<SubscriberMsg>);
-
-impl Stream {
-    pub fn new(e: Receiver<SubscriberMsg>) -> Self {
-        Self(e)
-    }
-}
-
-impl futures::Stream for Stream {
-    type Item = SubscriberMsg;
-    type Error = Error;
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.0.try_recv() {
-            Ok(e) => Poll::Ok(Async::Ready(Some(e))),
-            Err(TryRecvError::Empty) => Poll::Ok(Async::NotReady),
-            Err(TryRecvError::Disconnected) => Poll::Err(Error::Disconnected),
-        }
-    }
-}
-fn pubsub_loop(logger: Logger, rx: Receiver<Msg>) {
-    let mut subscriptions: HashMap<String, Vec<Sender<SubscriberMsg>>> = HashMap::new();
-    for msg in rx {
+async fn pubsub_loop(logger: Logger, mut rx: UnboundedReceiver<Msg>) {
+    let mut subscriptions: HashMap<String, Vec<UnboundedSender<SubscriberMsg>>> = HashMap::new();
+    while let Some(msg) = rx.next().await {
         match msg {
             Msg::Subscribe { channel, tx } => {
                 info!(logger, "Sub {}", channel);
@@ -84,7 +65,10 @@ fn pubsub_loop(logger: Logger, rx: Receiver<Msg>) {
                     .filter_map(|tx| {
                         let channel = channel.clone();
                         let msg = msg.clone();
-                        if tx.send(SubscriberMsg::Msg { channel, msg }).is_ok() {
+                        if tx
+                            .unbounded_send(SubscriberMsg::Msg { channel, msg })
+                            .is_ok()
+                        {
                             Some(tx)
                         } else {
                             None
@@ -96,10 +80,10 @@ fn pubsub_loop(logger: Logger, rx: Receiver<Msg>) {
     }
 }
 
-pub(crate) fn start(logger: &Logger) -> (JoinHandle<()>, Sender<Msg>) {
+pub(crate) fn start(logger: &Logger) -> Channel {
     let logger = logger.clone();
-    let (tx, rx) = bounded(100);
+    let (tx, rx) = unbounded();
 
-    let h = thread::spawn(move || pubsub_loop(logger, rx));
-    (h, tx)
+    task::spawn(pubsub_loop(logger, rx));
+    tx
 }

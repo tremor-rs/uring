@@ -14,31 +14,22 @@
 // use crate::{NodeId, KV};
 
 use super::*;
-use actix::io::SinkWrite;
-use actix::prelude::*;
-use actix_codec::Framed;
-use awc::{
-    error::WsProtocolError,
-    ws::{CloseCode, CloseReason, Codec as AxCodec, Frame, Message},
-    BoxedSocket, Client,
-};
-use crossbeam_channel::Sender;
-use futures::{
-    lazy,
-    stream::{SplitSink, Stream},
-    Future,
-};
+//use async_std::io;
+use async_std::net::TcpStream;
+//use async_std::prelude::*;
+//use async_std::task;
+use async_tungstenite::connect_async;
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::{select, FutureExt, StreamExt};
 use slog::Logger;
+//use std::env;
+use tungstenite::protocol::Message;
 use uring_common::NodeId;
 use ws_proto::{Protocol, ProtocolSelect};
 
-macro_rules! eat_error {
-    ($l:expr, $e:expr) => {
-        if let Err(e) = $e {
-            error!($l, "[WS Error] {}", e)
-        }
-    };
-}
+type WSStream = async_tungstenite::WebSocketStream<
+    async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
+>;
 
 macro_rules! eat_error_and_blow {
     ($l:expr, $e:expr) => {
@@ -55,236 +46,156 @@ macro_rules! eat_error_and_blow {
 pub(crate) struct Connection {
     //    my_id: u64,
     remote_id: NodeId,
-    tx: Sender<UrMsg>,
+    master: UnboundedSender<UrMsg>,
+    tx: UnboundedSender<WsMessage>,
+    rx: UnboundedReceiver<WsMessage>,
     logger: Logger,
-    sink: SinkWrite<SplitSink<Framed<BoxedSocket, AxCodec>>>,
+    ws_stream: WSStream,
     handshake_done: bool,
 }
 
-impl Connection {
-    fn hb(&self, ctx: &mut Context<Self>) {
-        ctx.run_later(HEARTBEAT_INTERVAL, |act, ctx| {
-            act.sink
-                .write(Message::Ping(String::from("Snot badger!")))
-                .unwrap();
-            act.hb(ctx);
-        });
-    }
-}
-
-impl actix::io::WriteHandler<WsProtocolError> for Connection {}
-
-impl Actor for Connection {
-    type Context = Context<Self>;
-
-    fn started(&mut self, ctx: &mut Context<Self>) {
-        self.hb(ctx)
-    }
-
-    fn stopped(&mut self, _: &mut Context<Self>) {
-        eat_error_and_blow!(self.logger, self.tx.send(UrMsg::DownLocal(self.remote_id)));
-        info!(self.logger, "system stopped");
-        System::current().stop();
-    }
-}
-
 /// Handle server websocket messages
-impl StreamHandler<Frame, WsProtocolError> for Connection {
-    fn handle(&mut self, msg: Frame, ctx: &mut Context<Self>) {
+impl Connection {
+    fn handle(&mut self, msg: Message) -> bool {
         if self.handshake_done {
-            match msg {
-                Frame::Close(_) => {
-                    eat_error!(self.logger, self.sink.write(Message::Close(None)));
-                }
-                Frame::Ping(data) => {
-                    eat_error!(self.logger, self.sink.write(Message::Pong(data)));
-                }
-                Frame::Text(Some(data)) => {
-                    let msg: CtrlMsg =
-                        eat_error_and_blow!(self.logger, serde_json::from_slice(&data));
-                    match msg {
-                        CtrlMsg::HelloAck(id, peer, peers) => {
-                            self.remote_id = id;
-                            eat_error_and_blow!(
-                                self.logger,
-                                self.tx
-                                    .send(UrMsg::RegisterLocal(id, peer, ctx.address(), peers))
-                            );
-                        }
-                        CtrlMsg::AckProposal(pid, success) => {
-                            eat_error_and_blow!(
-                                self.logger,
-                                self.tx.send(UrMsg::AckProposal(pid, success))
-                            );
-                        }
-                        _ => (),
+            if msg.is_binary() {
+                let msg = decode_ws(&msg.into_data());
+                println!("received raft message {:?}", msg);
+                self.master.unbounded_send(UrMsg::RaftMsg(msg)).unwrap();
+            } else if msg.is_text() {
+                let msg: CtrlMsg =
+                    eat_error_and_blow!(self.logger, serde_json::from_slice(&msg.into_data()));
+                match msg {
+                    CtrlMsg::HelloAck(id, peer, peers) => {
+                        self.remote_id = id;
+                        eat_error_and_blow!(
+                            self.logger,
+                            self.master.unbounded_send(UrMsg::RegisterLocal(
+                                id,
+                                peer,
+                                self.tx.clone(),
+                                peers
+                            ))
+                        );
                     }
+                    CtrlMsg::AckProposal(pid, success) => {
+                        eat_error_and_blow!(
+                            self.logger,
+                            self.master.unbounded_send(UrMsg::AckProposal(pid, success))
+                        );
+                    }
+                    _ => (),
                 }
-                Frame::Text(None) => {
-                    eat_error!(self.logger, self.sink.write(Message::Text(String::new())));
-                }
-                Frame::Binary(Some(bin)) => {
-                    let msg = decode_ws(&bin);
-                    println!("received raft message {:?}", msg);
-                    self.tx.send(UrMsg::RaftMsg(msg)).unwrap();
-                }
-                Frame::Binary(None) => (),
-                Frame::Pong(_) => (),
+            } else {
+                //
+                ()
             }
         } else {
-            match msg {
-                Frame::Close(_) => {
-                    eat_error!(self.logger, self.sink.write(Message::Close(None)));
-                }
-                Frame::Ping(data) => {
-                    eat_error!(self.logger, self.sink.write(Message::Pong(data)));
-                }
-                Frame::Text(Some(data)) => {
-                    let msg: ProtocolSelect =
-                        eat_error_and_blow!(self.logger, serde_json::from_slice(&data));
-                    match msg {
-                        ProtocolSelect::Selected {
-                            rid: RequestId(1),
-                            protocol: Protocol::URing,
-                        } => {
-                            self.handshake_done = true;
-                            self.tx.send(UrMsg::InitLocal(ctx.address())).unwrap();
-                        }
-                        ProtocolSelect::Selected { rid, protocol } => {
-                            error!(
-                                self.logger,
-                                "Wrong protocol select response: {} / {:?}", rid, protocol
-                            );
-                            ctx.stop();
-                        }
-                        ProtocolSelect::Select { rid, protocol } => {
-                            error!(
-                                self.logger,
-                                "Select response not selected response for: {} / {:?}",
-                                rid,
-                                protocol
-                            );
-                            ctx.stop();
-                        }
+            if msg.is_text() {
+                let msg: ProtocolSelect =
+                    eat_error_and_blow!(self.logger, serde_json::from_slice(&msg.into_data()));
+                match msg {
+                    ProtocolSelect::Selected {
+                        rid: RequestId(1),
+                        protocol: Protocol::URing,
+                    } => {
+                        self.handshake_done = true;
+                        self.master
+                            .unbounded_send(UrMsg::InitLocal(self.tx.clone()))
+                            .unwrap();
+                    }
+                    ProtocolSelect::Selected { rid, protocol } => {
+                        error!(
+                            self.logger,
+                            "Wrong protocol select response: {} / {:?}", rid, protocol
+                        );
+                        return false;
+                    }
+                    ProtocolSelect::Select { rid, protocol } => {
+                        error!(
+                            self.logger,
+                            "Select response not selected response for: {} / {:?}", rid, protocol
+                        );
+                        return false;
+                    }
 
-                        ProtocolSelect::As { protocol, .. } => {
-                            error!(
-                                self.logger,
-                                "as response not selected response for:  {:?}", protocol
-                            );
-                            ctx.stop();
-                        }
-                        ProtocolSelect::Subscribe { .. } => {
-                            error!(self.logger, "subscribe response not selected response for");
-                            ctx.stop();
-                        }
+                    ProtocolSelect::As { protocol, .. } => {
+                        error!(
+                            self.logger,
+                            "as response not selected response for:  {:?}", protocol
+                        );
+                        return false;
+                    }
+                    ProtocolSelect::Subscribe { .. } => {
+                        error!(self.logger, "subscribe response not selected response for");
+                        return false;
                     }
                 }
-                Frame::Text(None) => {
-                    ctx.stop();
-                }
-                Frame::Binary(_) => {
-                    ctx.stop();
-                }
-                Frame::Pong(_) => (),
+            } else {
+                //
+                ()
             }
         }
-    }
-
-    fn error(&mut self, error: WsProtocolError, _ctx: &mut Context<Self>) -> Running {
-        match error {
-            _ => eat_error!(
-                self.logger,
-                self.sink.write(Message::Close(Some(CloseReason {
-                    code: CloseCode::Protocol,
-                    description: None,
-                })))
-            ),
-        };
-        // Reconnect
-        Running::Continue
-    }
-
-    fn started(&mut self, _ctx: &mut Context<Self>) {
-        info!(self.logger, "[WS Onramp] Connection established.");
-    }
-
-    fn finished(&mut self, ctx: &mut Context<Self>) {
-        info!(self.logger, "[WS Onramp] Connection terminated.");
-        eat_error!(self.logger, self.sink.write(Message::Close(None)));
-        ctx.stop()
+        true
     }
 }
 
-pub(crate) fn remote_endpoint(
+async fn worker(
+    logger: Logger,
     endpoint: String,
-    master: Sender<UrMsg>,
+    master: UnboundedSender<UrMsg>,
+) -> std::io::Result<()> {
+    let url = url::Url::parse(&format!("ws://{}", endpoint)).unwrap();
+    loop {
+        let logger = logger.clone();
+        let ws_stream = if let Ok((ws_stream, _)) = connect_async(url.clone()).await {
+            ws_stream
+        } else {
+            error!(logger, "Failed to connect to {}", endpoint);
+            break;
+        };
+        let (tx, rx) = unbounded::<WsMessage>();
+        let mut c = Connection {
+            logger,
+            remote_id: NodeId(0),
+            master: master.clone(),
+            ws_stream,
+            handshake_done: false,
+            rx,
+            tx,
+        };
+        loop {
+            select! {
+                msg = c.rx.next().fuse() =>
+                    match msg {
+                        Some(WsMessage::Raft(msg)) => {c.ws_stream.send(Message::Binary(encode_ws(msg).to_vec())).await.unwrap();},
+                        Some(WsMessage::Ctrl(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.unwrap();},
+                        Some(WsMessage::Reply(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.unwrap();},
+                        None => break
+                },
+                msg = c.ws_stream.next().fuse() => {
+                    if let Some(Ok(msg)) = msg {
+                        if ! c.handle(msg) {
+                            break
+                        }
+                    }
+
+                }
+            }
+        }
+        c.master
+        .unbounded_send(UrMsg::DownLocal(c.remote_id))
+        .unwrap();
+
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn remote_endpoint(
+    endpoint: String,
+    master: UnboundedSender<UrMsg>,
     logger: Logger,
 ) -> std::io::Result<()> {
-    loop {
-        let sys = actix::System::new("ws-example");
-        let endpoint1 = endpoint.clone();
-        let master1 = master.clone();
-        // This clones the logger passed in from the function and makes it local for each loop
-        let logger = logger.clone();
-        Arbiter::spawn(lazy(move || {
-            let err_logger = logger.clone();
-            Client::new()
-                .ws(&format!("ws://{}/uring", endpoint1))
-                .connect()
-                .map_err(move |e| {
-                    error!(err_logger, "Error: {}", e);
-                    ()
-                })
-                .map(move |(_response, framed)| {
-                    let (sink, stream) = framed.split();
-                    let master2 = master1.clone();
-                    Connection::create(move |ctx| {
-                        Connection::add_stream(stream, ctx);
-                        let mut sink = SinkWrite::new(sink, ctx);
-                        sink.write(Message::Text(
-                            serde_json::to_string(&ProtocolSelect::Select {
-                                rid: RequestId(1),
-                                protocol: Protocol::URing,
-                            })
-                            .unwrap(),
-                        ))
-                        .unwrap();
-                        Connection {
-                            logger,
-                            remote_id: NodeId(0),
-                            tx: master2,
-                            sink,
-                            handshake_done: false,
-                        }
-                    });
-                })
-        }));
-        sys.run().unwrap();
-        //        dbg!(r);
-    }
-}
-
-/// Handle stdin commands
-impl Handler<RaftMsg> for Connection {
-    type Result = ();
-
-    fn handle(&mut self, msg: RaftMsg, _ctx: &mut Context<Self>) {
-        self.sink.write(Message::Binary(encode_ws(msg))).unwrap();
-    }
-}
-
-/// Handle stdin commands
-impl Handler<WsMessage> for Connection {
-    type Result = ();
-
-    fn handle(&mut self, msg: WsMessage, _ctx: &mut Context<Self>) {
-        match msg {
-            WsMessage::Msg(data) => eat_error!(
-                self.logger,
-                self.sink
-                    .write(Message::Text(serde_json::to_string(&data).unwrap()))
-            ),
-        }
-    }
+    worker(logger, endpoint, master).await
 }
