@@ -49,6 +49,7 @@ def subscribe_all():
 def subscribe(rc):
     rc.subscribe('kv', lambda json: report('KV', json))
     rc.subscribe('mring', lambda json: report('MRing', json))
+    rc.subscribe('reply', lambda json: report('REPLY:', json))
     rc.subscribe('uring', lambda json: report('URing', json))
     rc.subscribe('uring', on_uring_change)
 
@@ -136,6 +137,37 @@ class Commands(cmd.Cmd):
         """
         pause(int(line.split()[0])-1)
 
+    def do_write(self, line):
+        """
+            write <node> <key> <value>
+            - On node <node> writes <value> to <key>
+        """
+        node = int(line.split()[0])-1
+        key = line.split()[1]
+        value = line.split()[2]
+        client = rcs[node]
+        client.execute_as("KV", client.kv_put_cmd(key, value))
+
+    def do_read(self, line):
+        """
+            read <node> <key>
+            - On node <node> reads the value of <key>
+        """
+        node = int(line.split()[0])-1
+        key = line.split()[1]
+        client = rcs[node]
+        client.execute_as("KV", client.kv_get_cmd(key))
+
+    def do_delete(self, line):
+        """
+            delete <node> <key>
+            - On node <node> deletes the value of <key>
+        """
+        node = int(line.split()[0])-1
+        key = line.split()[1]
+        client = rcs[node]
+        client.execute_as("KV", client.kv_delete_cmd(key))
+
     def do_resume(self, line):
         """
             resume <node>
@@ -176,9 +208,14 @@ class Commands(cmd.Cmd):
         for rc in rcs:
             if rc.port != leader.port:
                 url = "http://{}:{}/uring/{}"
-                print(url.format(leader.host, leader.port + 1000, rc.node_id))
+                # we need to add 1000 to the port for HTTP
+                # we need to add 1 to the node id since the python client stores
+                # 0 as the first node id not 1 as RAFT does
+                print(url.format(leader.host, leader.port + 1000, rc.node_id + 1))
                 response = requests.post(url.format(
-                    leader.host, leader.port + 1000, rc.node_id))
+                    leader.host, leader.port + 1000, rc.node_id + 1))
+                # so we have a good chance the config change is done
+                time.sleep(1)
                 print(response)
 
     def do_status(self, line):

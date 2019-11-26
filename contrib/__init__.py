@@ -186,6 +186,9 @@ class RaftClient(ChannelObserver):
 
     def on_message(self, message):
         as_json = simplejson.loads(message)
+        if 'rid' in as_json:
+            for handlers in self.hub.obs['reply']:
+                handlers(as_json['data'])
         if 'channel' in as_json['Msg']:
             for handlers in self.hub.obs[as_json['Msg']['channel']]:
                 handlers(as_json)
@@ -238,23 +241,31 @@ class RaftClient(ChannelObserver):
         }))
 
     def kv_get(self, key):
-        self.ws.send(simplejson.dumps({
+        self.ws.send(simplejson.dumps(self.kv_get_cmd(key)))
+
+    def kv_get_cmd(self, key):
+        rid = self.rid
+        self.rid = self.rid + 1
+        return {
             "Get": {
                 "rid": self.rid,
                 "key": key
             }
-        }))
-        self.rid = self.rid + 1
+        }
 
     def kv_put(self, key, store):
-        self.ws.send(simplejson.dumps({
+        self.ws.send(simplejson.dumps(self.kv_put_cmd(key, store)))
+
+    def kv_put_cmd(self, key, store):
+        rid = self.rid
+        self.rid = self.rid + 1
+        return {
             "Put": {
-                "rid": self.rid,
+                "rid": rid,
                 "key": key,
                 "store": store
             }
-        }))
-        self.rid = self.rid + 1
+        }
 
     def kv_cas(self, key, check, store):
         self.ws.send(simplejson.dumps({
@@ -268,13 +279,17 @@ class RaftClient(ChannelObserver):
         self.rid = self.rid + 1
 
     def kv_delete(self, key):
-        self.ws.send(simplejson.dumps({
+        self.ws.send(simplejson.dumps(self.kv_delete_cmd(key)))
+
+    def kv_delete_cmd(self, key):
+        rid = self.rid
+        self.rid = self.rid + 1
+        return {
             "Delete": {
-                "rid": self.rid,
+                "rid": rid,
                 "key": key
             }
-        }))
-        self.rid = self.rid + 1
+        }
 
     def mring_get_size(self):
         self.ws.send(simplejson.dumps({
