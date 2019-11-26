@@ -31,7 +31,6 @@ use crate::storage::URRocksStorage;
 use async_std::task;
 use clap::{App as ClApp, Arg};
 use futures::{select, FutureExt, StreamExt};
-use raft::Result as RaftResult;
 use serde_derive::{Deserialize, Serialize};
 use slog::{Drain, Logger};
 use slog_json;
@@ -48,7 +47,7 @@ pub struct KV {
     value: serde_json::Value,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Event {
     sid: ServiceId,
     eid: EventId,
@@ -71,7 +70,6 @@ async fn raft_loop<N: Network>(
     logger: Logger,
 ) {
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
-    let mut t1 = Instant::now();
     let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
         RaftNode::create_raft_leader(&logger, id, pubsub, network).await
     } else {

@@ -207,7 +207,7 @@ impl Connection {
                     .tx
                     .unbounded_send(UrMsg::Cas(
                         key.into_bytes(),
-                        check.into_bytes(),
+                        check.map(String::into_bytes),
                         store.into_bytes(),
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))

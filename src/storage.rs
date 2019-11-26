@@ -14,7 +14,7 @@
 
 // inspired by https://github.com/LucioFranco/kv/blob/master/src/storage.rs
 
-use crate::{NodeId, KV};
+use crate::NodeId;
 use async_trait::async_trait;
 use protobuf::Message;
 use raft::prelude::*;
@@ -40,9 +40,9 @@ pub trait WriteStorage {
         &self,
         keyscope: u16,
         key: &[u8],
-        check_value: &[u8],
+        check_value: Option<&[u8]>,
         store_value: &[u8],
-    ) -> Option<Vec<u8>>;
+    ) -> Option<Option<Vec<u8>>>;
     async fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>>;
 }
 
@@ -170,27 +170,15 @@ impl WriteStorage for URRocksStorage {
         &self,
         scope: u16,
         key: &[u8],
-        check_value: &[u8],
+        check_value: Option<&[u8]>,
         store_value: &[u8],
-    ) -> Option<Vec<u8>> {
-        match self.get(scope, key).await {
-            None => {
-                //self.put(scope, key, store_value);
-                //true
-                if check_value.is_empty() {
-                    None
-                } else {
-                    Some(vec![])
-                }
-            }
-            Some(value) => {
-                if value == check_value {
-                    self.put(scope, key, store_value);
-                    None
-                } else {
-                    Some(value)
-                }
-            }
+    ) -> Option<Option<Vec<u8>>> {
+        let value = self.get(scope, key).await;
+        if value.as_ref().map(|v| v.as_slice()) == check_value {
+            self.put(scope, key, store_value).await;
+            None
+        } else {
+            Some(value)
         }
     }
     async fn delete(&self, scope: u16, key: &[u8]) -> Option<Vec<u8>> {

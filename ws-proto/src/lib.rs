@@ -60,7 +60,7 @@ pub enum KVRequest {
     Cas {
         rid: RequestId,
         key: String,
-        check: String,
+        check: Option<String>,
         store: String,
     },
 }

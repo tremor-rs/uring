@@ -43,9 +43,6 @@ impl Msg {
         Self::Msg { channel, msg }
     }
 }
-pub enum Error {
-    Disconnected,
-}
 
 async fn pubsub_loop(logger: Logger, mut rx: UnboundedReceiver<Msg>) {
     let mut subscriptions: HashMap<String, Vec<UnboundedSender<SubscriberMsg>>> = HashMap::new();

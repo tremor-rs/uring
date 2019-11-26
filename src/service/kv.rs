@@ -32,7 +32,7 @@ pub(crate) enum PSEvent {
         scope: u16,
         key: String,
         new: String,
-        old: String,
+        old: Option<String>,
     },
     CasConflict {
         scope: u16,
@@ -71,7 +71,7 @@ pub enum Event {
     },
     Cas {
         key: Vec<u8>,
-        check_value: Vec<u8>,
+        check_value: Option<Vec<u8>>,
         store_value: Vec<u8>,
     },
     Delete {
@@ -86,7 +86,7 @@ impl Event {
     pub fn put(key: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
         serde_json::to_vec(&Event::Put { key, value }).unwrap()
     }
-    pub fn cas(key: Vec<u8>, check_value: Vec<u8>, store_value: Vec<u8>) -> Vec<u8> {
+    pub fn cas(key: Vec<u8>, check_value: Option<Vec<u8>>, store_value: Vec<u8>) -> Vec<u8> {
         serde_json::to_vec(&Event::Cas {
             key,
             check_value,
@@ -156,10 +156,15 @@ where
                 store_value,
             }) => {
                 if let Some(conflict) = storage
-                    .cas(self.scope, &key, &check_value, &store_value)
+                    .cas(
+                        self.scope,
+                        &key,
+                        check_value.as_ref().map(|v| v.as_slice()),
+                        &store_value,
+                    )
                     .await
                 {
-                    let conflict = String::from_utf8(conflict).ok();
+                    let conflict = conflict.and_then(|o| String::from_utf8(o).ok());
                     let msg = serde_json::to_value(&PSEvent::CasConflict {
                         scope: self.scope,
                         key: String::from_utf8(key).unwrap_or_default(),
@@ -173,16 +178,21 @@ where
                             msg: msg,
                         })
                         .unwrap();
-                    Ok(conflict
-                        .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
+                    if let Some(conflict) = conflict {
+                        dbg!(Ok(Some(
+                            serde_json::to_vec(&serde_json::Value::String(conflict)).unwrap(),
+                        )))
+                    } else {
+                        Ok(Some(serde_json::to_vec(&serde_json::Value::Null).unwrap()))
+                    }
                 } else {
-                    let old = String::from_utf8(check_value).ok();
+                    let old = check_value.and_then(|c| String::from_utf8(c).ok());
                     let new = String::from_utf8(store_value).ok();
                     let msg = serde_json::to_value(&PSEvent::Cas {
                         scope: self.scope,
                         key: String::from_utf8(key).unwrap_or_default(),
                         new: new.clone().unwrap_or_default(),
-                        old: old.unwrap(),
+                        old,
                     })
                     .unwrap();
                     pubsub
@@ -191,7 +201,7 @@ where
                             msg: msg,
                         })
                         .unwrap();
-                    Ok(new.and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
+                    Ok(None)
                 }
             }
             Ok(Event::Delete { key }) => Ok(storage

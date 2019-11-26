@@ -79,7 +79,7 @@ async fn kv_post(mut cx: Context<Node>) -> EndpointResult {
 
 #[derive(Deserialize)]
 struct CasBody {
-    check: String,
+    check: Option<String>,
     store: String,
 }
 
@@ -92,20 +92,29 @@ async fn kv_cas(mut cx: Context<Node>) -> EndpointResult {
         .tx
         .unbounded_send(UrMsg::Cas(
             id,
-            body.check.clone().into_bytes(),
+            body.check.clone().map(String::into_bytes),
             body.store.clone().into_bytes(),
             Reply::Direct(tx),
         ))
         .unwrap();
-    // FIXME improve status when check fails vs succeeds?
-    rx.next()
-        .await
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
-        .map(|_| response::json("created"))
-        .map(|mut r| {
+    if let Some(result) = rx.next().await {
+        if let Some(conflict) = result {
+            dbg!(String::from_utf8(conflict.clone()));
+            let mut r = if conflict.is_empty() {
+                response::json(serde_json::Value::Null)
+            } else {
+                response::json(serde_json::from_slice::<serde_json::Value>(&conflict).unwrap())
+            };
+            *r.status_mut() = StatusCode::CONFLICT;
+            Ok(r)
+        } else {
+            let mut r = response::json("set");
             *r.status_mut() = StatusCode::CREATED;
-            r
-        })
+            Ok(r)
+        }
+    } else {
+        Err(StatusCode::INTERNAL_SERVER_ERROR)?
+    }
 }
 
 async fn kv_delete(cx: Context<Node>) -> EndpointResult {

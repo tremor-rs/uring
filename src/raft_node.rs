@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-use crate::network::TryNextError;
 use crate::service::Service;
 use crate::storage::*;
 use protobuf::Message as PBMessage;
@@ -68,7 +67,6 @@ where
     pending_proposals: HashMap<ProposalId, Proposal>,
     pending_acks: HashMap<ProposalId, EventId>,
     proposal_id: u64,
-    timer: Instant,
     tick_duration: Duration,
     services: HashMap<ServiceId, Box<dyn Service<Storage>>>,
     pubsub: pubsub::Channel,
@@ -408,7 +406,6 @@ where
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
-            timer: Instant::now(),
             tick_duration: Duration::from_millis(100),
             services: HashMap::new(),
             pubsub,
@@ -443,7 +440,6 @@ where
             pending_proposals: HashMap::new(),
             pending_acks: HashMap::new(),
             proposal_id: 0,
-            timer: Instant::now(),
             tick_duration: Duration::from_millis(100),
             services: HashMap::new(),
             pubsub,
@@ -576,6 +572,7 @@ where
                     // For normal proposals, extract the key-value pair and then
                     // insert them into the kv engine.
                     if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
+                        dbg!(&event);
                         if let Some(service) = self.services.get_mut(&event.sid) {
                             let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
                             let value = service

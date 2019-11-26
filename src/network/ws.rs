@@ -32,7 +32,6 @@ use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
 use std::io;
-use std::time::Duration;
 use ws_proto::Reply as ProtoReply;
 
 type LocalMailboxes = HashMap<NodeId, UnboundedSender<WsMessage>>;
@@ -95,7 +94,7 @@ pub(crate) enum UrMsg {
     // KV related
     Get(Vec<u8>, Reply),
     Put(Vec<u8>, Vec<u8>, Reply),
-    Cas(Vec<u8>, Vec<u8>, Vec<u8>, Reply),
+    Cas(Vec<u8>, Option<Vec<u8>>, Vec<u8>, Reply),
     Delete(Vec<u8>, Reply),
 
     // VNode
@@ -120,7 +119,7 @@ impl NetworkTrait for Network {
                 )
                 .unwrap(),
             Some(Reply::Direct(sender)) => sender.unbounded_send(data).unwrap(),
-            None => (),
+            None => error!(self.logger, "Uknown event id {} for reply: {:?}", id, data),
         };
         Ok(())
     }
