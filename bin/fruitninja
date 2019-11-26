@@ -1,4 +1,5 @@
 #!/usr/bin/env python3 -u
+import signal
 import os
 import sys
 import contrib
@@ -318,7 +319,38 @@ class Commands(cmd.Cmd):
             except:
                 print("Invalid node id")
 
+    def do_kv(self,line):
+        """
+            kv <node> get <key>
+            kv <node> put <key> <value>
+            kv <node> cas <key> <check> <store>
+            kv <node> del <key>
+        """
+        args = line.split()
+        if len(args) < 1:
+            print("Expected at least one argument")
 
+        global rcs
+        if len(args) == 3 and args[1] == "get":
+            try:
+                rcs[int(args[0])].kv_get(args[2])
+            except:
+                print("Invalid node id")
+        if len(args) == 4 and args[1] == "put":
+            try:
+                rcs[int(args[0])].kv_put(args[2], args[3])
+            except:
+                print("Invalid node id")
+        if len(args) == 5 and args[1] == "cas":
+            try:
+                rcs[int(args[0])].kv_cas(args[2], args[3], args[4])
+            except:
+                print("Invalid node id")
+        if len(args) == 3 and args[1] == "del":
+            try:
+                rcs[int(args[0])].kv_delete(args[1])
+            except:
+                print("Invalid node id")
 
     def postloop(self):
         print
@@ -342,9 +374,25 @@ def cmd_thread():
             cwq.insert(0, line)
             print("UNKNOWN CMD: {}".format(line))
 
+def cleanup():
+    os.system('clear')
+    print("Bye!")
+
+def excepthook(type_, value, tb ):
+    cleanup()
+
+def signal_handler(sig, frame):
+        cleanup()
+        sys.exit(0)
+
+sys.excepthook = excepthook
+signal.signal(signal.SIGINT, signal_handler)
+atexit.register(cleanup)
 
 commander = threading.Thread(target=cmd_thread)
 commander.start()
+
+
 
 i = 0
 while not quit:
@@ -353,11 +401,6 @@ while not quit:
     while len(cwq) > 0:
         print('Task: {}'.format(cwq.pop()))
         i = i + 1
-
-def cleanup():
-    os.system('clear')
-
-atexit.register(cleanup)
 
 disconnect_all()
 print('{"status": "end"}')
