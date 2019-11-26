@@ -16,6 +16,7 @@ use super::*;
 use crate::{pubsub, storage, ServiceId};
 use async_trait::async_trait;
 use serde_derive::{Deserialize, Serialize};
+use slog::Logger;
 
 pub const ID: ServiceId = ServiceId(0);
 
@@ -47,11 +48,15 @@ pub(crate) enum PSEvent {
 }
 pub struct Service {
     scope: u16,
+    logger: Logger,
 }
 
 impl Service {
-    pub fn new(scope: u16) -> Self {
-        Self { scope }
+    pub fn new(logger: &Logger, scope: u16) -> Self {
+        Self {
+            scope,
+            logger: logger.clone(),
+        }
     }
 }
 
@@ -106,17 +111,30 @@ where
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
         match serde_json::from_slice(&event) {
-            Ok(Event::Get { key }) => Ok(storage
-                .get(self.scope, &key)
-                .await
-                .and_then(|v| String::from_utf8(v).ok())
-                .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())),
+            Ok(Event::Get { key }) => {
+                debug!(
+                    self.logger,
+                    "READ {:?}",
+                    String::from_utf8(key.clone()).ok()
+                );
+                Ok(storage
+                    .get(self.scope, &key)
+                    .await
+                    .and_then(|v| String::from_utf8(v).ok())
+                    .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
+            }
             Ok(Event::Put { key, value }) => {
+                debug!(
+                    self.logger,
+                    "WROTE {:?}: {:?}",
+                    String::from_utf8(key.clone()).ok(),
+                    String::from_utf8(value.clone()).ok()
+                );
                 let old = storage
                     .get(self.scope, &key)
                     .await
                     .and_then(|value| String::from_utf8(value).ok());
-                storage.put(self.scope, &key, &value);
+                storage.put(self.scope, &key, &value).await;
                 let msg = serde_json::to_value(&PSEvent::Put {
                     scope: self.scope,
                     key: String::from_utf8(key).unwrap_or_default(),

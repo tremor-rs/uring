@@ -184,14 +184,16 @@ async fn worker(
                 },
                 msg = c.ws_stream.next().fuse() => {
                     if let Some(Ok(msg)) = msg {
-                        c.handle(msg) 
+                        c.handle(msg)
                     } else {
                         false
                     }
                 },
                 complete => false
             };
-            if ! cont { break;}
+            if !cont {
+                break;
+            }
         }
         c.master
             .unbounded_send(UrMsg::DownLocal(c.remote_id))

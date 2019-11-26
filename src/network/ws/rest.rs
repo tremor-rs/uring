@@ -38,10 +38,10 @@ async fn kv_get(cx: Context<Node>) -> EndpointResult {
         .tx
         .unbounded_send(UrMsg::Get(id.clone(), Reply::Direct(tx)))
         .unwrap();
-    dbg!(rx.next()
-        .await)
-        .and_then(|v| dbg!(v))
-        .and_then(|v| String::from_utf8(v).ok())
+    rx.next()
+        .await
+        .and_then(|v| v)
+        .and_then(|v| serde_json::from_slice::<serde_json::Value>(&v).ok())
         .ok_or(StatusCode::NOT_FOUND.into())
         .map(|value| KV { key, value })
         .map(response::json)
@@ -119,7 +119,7 @@ async fn kv_delete(cx: Context<Node>) -> EndpointResult {
     rx.next()
         .await
         .and_then(|v| v)
-        .and_then(|v| String::from_utf8(v).ok())
+        .and_then(|v| serde_json::from_slice(&v).ok())
         .ok_or(StatusCode::NOT_FOUND.into())
         .map(|value| KV { key, value })
         .map(response::json)

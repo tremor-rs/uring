@@ -45,7 +45,7 @@ extern crate slog;
 #[derive(Deserialize, Serialize)]
 pub struct KV {
     key: String,
-    value: String,
+    value: serde_json::Value,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -79,7 +79,7 @@ async fn raft_loop<N: Network>(
     };
     node.set_raft_tick_duration(Duration::from_millis(100));
     node.log();
-    let kv = kv::Service::new(0);
+    let kv = kv::Service::new(&logger, 0);
     node.add_service(kv::ID, Box::new(kv));
     let mut vnode: mring::Service<continuous::Strategy> = mring::Service::new();
 

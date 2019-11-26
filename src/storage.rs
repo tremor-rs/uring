@@ -20,8 +20,8 @@ use protobuf::Message;
 use raft::prelude::*;
 pub use raft::storage::Storage as ReadStorage;
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
+use serde_derive::{Deserialize, Serialize};
 use std::borrow::Borrow;
-
 #[async_trait]
 pub trait Storage: WriteStorage + ReadStorage {
     async fn new_with_conf_state(id: NodeId, state: ConfState) -> Self;
@@ -75,6 +75,11 @@ impl Storage for URRocksStorage {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct HandoffKV {
+    key: String,
+    value: String,
+}
 impl URRocksStorage {
     fn get_hard_state(&self) -> HardState {
         let mut hs = HardState::new();
@@ -127,7 +132,7 @@ impl URRocksStorage {
                 k <= &HIGH_DATA[..]
             })
             .map(|(k, v)| {
-                serde_json::to_string(&KV {
+                serde_json::to_string(&HandoffKV {
                     key: base64::encode(&k),
                     value: base64::encode(&v),
                 })
@@ -142,7 +147,7 @@ impl URRocksStorage {
         self.clear_data();
 
         for kv in data.split(|c| *c == b'\n') {
-            if let Ok(kv) = serde_json::from_slice::<KV>(&kv) {
+            if let Ok(kv) = serde_json::from_slice::<HandoffKV>(&kv) {
                 let k = base64::decode(&kv.key).unwrap();
                 let v = base64::decode(&kv.value).unwrap();
                 self.backend.put(&k, &v).unwrap();
