@@ -294,7 +294,7 @@ class RaftClient(ChannelObserver):
     def mring_get_size(self):
         self.ws.send(simplejson.dumps({
             "GetSize": {
-                "rid": self.rid,
+                "rid": self.rid
             }
         }))
         self.rid = self.rid + 1
@@ -316,6 +316,16 @@ class RaftClient(ChannelObserver):
             }
         }))
         self.rid = self.rid + 1
+
+    def mring_remove_node(self, name):
+        self.ws.send(simplejson.dumps({
+            "RemoveNode": {
+                "rid": self.rid,
+                "node": name,
+            }
+        }))
+        self.rid = self.rid + 1
+
 
     def on_open(self):
         # FIXME TODO call virtual ws.open channel ...
