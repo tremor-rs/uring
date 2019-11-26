@@ -174,23 +174,24 @@ async fn worker(
             tx,
         };
         loop {
-            select! {
+            let cont = select! {
                 msg = c.rx.next().fuse() =>
                     match msg {
-                        Some(WsMessage::Raft(msg)) => {c.ws_stream.send(Message::Binary(encode_ws(msg).to_vec())).await.unwrap();},
-                        Some(WsMessage::Ctrl(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.unwrap();},
-                        Some(WsMessage::Reply(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.unwrap();},
-                        None => break
+                        Some(WsMessage::Raft(msg)) => {c.ws_stream.send(Message::Binary(encode_ws(msg).to_vec())).await.is_ok()},
+                        Some(WsMessage::Ctrl(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()},
+                        Some(WsMessage::Reply(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()},
+                        None => false
                 },
                 msg = c.ws_stream.next().fuse() => {
                     if let Some(Ok(msg)) = msg {
-                        if ! c.handle(msg) {
-                            break
-                        }
+                        c.handle(msg) 
+                    } else {
+                        false
                     }
-
-                }
-            }
+                },
+                complete => false
+            };
+            if ! cont { break;}
         }
         c.master
             .unbounded_send(UrMsg::DownLocal(c.remote_id))

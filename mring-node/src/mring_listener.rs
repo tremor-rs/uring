@@ -95,6 +95,7 @@ pub(crate) async fn run(
                 Some(Err(_e)) => break,
                 None => break,
             },
+            complete => break
         }
     }
 }

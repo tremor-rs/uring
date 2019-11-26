@@ -328,35 +328,35 @@ class RaftClient(ChannelObserver):
         url = "http://{}:{}/status"
         headers = {'Content-type': 'application/json'}
         response = requests.get(url.format(
-            self.host, self.port), headers=headers, timeout=1)
+            self.host, self.port + 1000), headers=headers, timeout=1)
         return response
 
     def register(self):
         url = "http://{}:{}/uring/{}"
         response = requests.post(url.format(
-            self.host, self.port, self.node_id))
+            self.host, self.port + 1000, self.node_id))
         return response
 
     def get(self, k):
         url = "http://{}:{}/kv/{}"
-        response = requests.get(url.format(self.host, self.port, k))
+        response = requests.get(url.format(self.host, self.port + 1000, k))
         return response
 
     def put(self, k, v):
         url = "http://{}:{}/kv/{}"
         headers = {'Content-type': 'application/json'}
         response = requests.post(url.format(
-            self.host, self.port, k), v, headers=headers)
+            self.host, self.port + 1000, k), v, headers=headers)
         return response
 
     def cas(self, k, v):
         url = "http://{}:{}/kv/{}/cas"
         headers = {'Content-type': 'application/json'}
         response = requests.post(url.format(
-            self.host, self.port, k), v, headers=headers)
+            self.host, self.port + 1000, k), v, headers=headers)
         return response
 
     def delete(self, k):
         url = "http://{}:{}/kv/{}"
-        response = requests.delete(url.format(self.host, self.port, k))
+        response = requests.delete(url.format(self.host, self.port + 1000, k))
         return response

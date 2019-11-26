@@ -8,7 +8,7 @@ import cmd
 import websocket
 import requests
 
-PORTS = [8081,8082,8083,8084,8085]
+PORTS = [8081, 8082, 8083, 8084, 8085]
 
 endpoints = []
 rcs = []
@@ -29,8 +29,10 @@ for port in PORTS:
 def on_uring_change(_subject, message):
     print(f"URING: {message}")
 
-def report(_subject,json):
+
+def report(_subject, json):
     print("{}\n".format(simplejson.dumps(json)))
+
 
 def maybe_reconnect():
     for rc in endpoints:
@@ -38,9 +40,11 @@ def maybe_reconnect():
             rc.ws_start()
             # rc.subscribe('uring', lambda json: report('URING', json)
 
+
 def subscribe_all():
     for rc in endpoints:
         subscribe(rc)
+
 
 def subscribe(rc):
     rc.subscribe('kv', lambda json: report('KV', json))
@@ -48,41 +52,50 @@ def subscribe(rc):
     rc.subscribe('uring', lambda json: report('URing', json))
     rc.subscribe('uring', on_uring_change)
 
+
 def disconnect_all():
     for rc in endpoints:
         if not rc.ws.sock is None:
             rc.ws.close()
 
+
 time.sleep(1)
+
 
 def wsc_open(ws):
     time.sleep(5)
     ws.connect()
     print(f"WS Cluster Command Connection estasblished")
 
+
 def wsc_message(ws, message):
     print(f"WS Cluster Command Connection message {message}")
+
 
 def wsc_error(ws, error):
     print(f"WS Cluster Command Connection error {error}")
 
+
 def wsc_close(ws):
     print("WS Cluster Command Connection closed")
+
 
 wsc = None
 quit = False
 cwq = []
 
+
 def wsc():
     global wsc
     global quit
     wsc = websocket.WebSocketApp("ws://127.0.0.1:8000/",
-        on_open = wsc_open,
-        on_message = wsc_message,
-        on_error = wsc_error,
-        on_close = wsc_close)
+                                 on_open=wsc_open,
+                                 on_message=wsc_message,
+                                 on_error=wsc_error,
+                                 on_close=wsc_close)
     while not quit:
         wsc.run_forever()
+
 
 t = threading.Thread(target=wsc)
 t.start()
@@ -99,10 +112,12 @@ def pause(which):
     wsc.send(f"pause {which}")
     print(rcs[which])
 
+
 def resume(which):
     print(f"Resuming node: {which}")
     wsc.send(f"resume {which}")
     print(rcs[which])
+
 
 class Commands(cmd.Cmd):
     prompt = '🍒🍌🍏> '
@@ -146,23 +161,24 @@ class Commands(cmd.Cmd):
         """
         leader = None
 
+        print(f"RCS: {rcs}")
         # find leader node
         for rc in rcs:
             try:
                 b = simplejson.loads(rc.status().content)
                 if b['role'] == "Leader":
-                    leader = rc;
-                    break;
+                    leader = rc
+                    break
             except:
                 print(f"ID: {rc.name} DOWN")
 
         # register nodes ( idempotent )
         for rc in rcs:
             if rc.port != leader.port:
-                url = "http://{}:{}/node/{}"
-                print(url.format(leader.host, leader.port, rc.node_id))
-                response = requests.post(url.format(leader.host, leader.port, rc.node_id))
-                print(response)
+                url = "http://{}:{}/uring/{}"
+                print(url.format(leader.host, leader.port + 1000, rc.node_id))
+                response = requests.post(url.format(
+                    leader.host, leader.port + 1000, rc.node_id))
                 print(response)
 
     def do_status(self, line):
@@ -176,15 +192,20 @@ class Commands(cmd.Cmd):
                 b = simplejson.loads(rc.status().content)
                 b['ok'] = 'up'
                 statuses[rc.node_id] = b
-                print(f"ID: {b['id']} Role: {b['role']} Term: {b['term']} LastIndex: {b['last_index']}")
+                print(
+                    f"ID: {b['id']} Role: {b['role']} Term: {b['term']} LastIndex: {b['last_index']}")
             except:
-                b = { 'id': rc.node_id, 'role': 'Zombie', 'term': -1, 'last_index': -1, 'ok': 'down' }
+                b = {'id': rc.node_id, 'role': 'Zombie',
+                     'term': -1, 'last_index': -1, 'ok': 'down'}
                 statuses[rc.node_id] = b
                 print(f"ID: {rc.name} DOWN")
-        leader_count = len(list(filter(lambda x: x['role'] == "Leader", statuses)))
+        leader_count = len(
+            list(filter(lambda x: x['role'] == "Leader", statuses)))
         all_adjoined = len(list(filter(lambda x: x['term'] > 0, statuses)))
-        last_index = list(set(map(lambda x: x['last_index'], filter(lambda x: x['last_index'] > 0, statuses))))
-        term = list(set(map(lambda x: x['term'], filter(lambda x: x['term'] > 0, statuses))))
+        last_index = list(set(map(lambda x: x['last_index'], filter(
+            lambda x: x['last_index'] > 0, statuses))))
+        term = list(
+            set(map(lambda x: x['term'], filter(lambda x: x['term'] > 0, statuses))))
         li_count = len(last_index)
         te_count = len(term)
         converges = leader_count == 1 and all_adjoined == 5 and li_count == 1 and te_count == 1
@@ -200,19 +221,21 @@ class Commands(cmd.Cmd):
         # noop
         None
 
+
 def cmd_thread():
     global quit
     global cwq
     line = None
     while not quit:
-       line = sys.stdin.readline().strip()
-       if line == "quit":
-           quit = True
-           return
-       else:
-           Commands().do_interactive(line)
-           cwq.insert(0, line)
-           print("UNKNOWN CMD: {}".format(line))
+        line = sys.stdin.readline().strip()
+        if line == "quit":
+            quit = True
+            return
+        else:
+            Commands().do_interactive(line)
+            cwq.insert(0, line)
+            print("UNKNOWN CMD: {}".format(line))
+
 
 commander = threading.Thread(target=cmd_thread)
 commander.start()
@@ -227,4 +250,3 @@ while not quit:
 
 disconnect_all()
 print('{"status": "end"}')
-

@@ -325,6 +325,7 @@ impl Connection {
                         false
                     }
                 }
+                complete => false
             };
             if !cont {
                 error!(logger, "Client connection to {} down.", self.remote_id);
@@ -342,9 +343,13 @@ pub(crate) async fn accept_connection<S>(logger: Logger, node: Node, stream: S)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut ws_stream = async_tungstenite::accept_async(stream)
-        .await
-        .expect("Error during the websocket handshake occurred");
+    let mut ws_stream = if let Ok(ws_stream) = async_tungstenite::accept_async(stream)
+        .await {
+            ws_stream
+        } else {
+            error!(logger, "Error during the websocket handshake occurred");
+            return;
+        };
 
     // Create a channel for our stream, which other sockets will use to
     // send us messages. Then register our address with the stream to send
@@ -374,6 +379,10 @@ where
                     break;
                 }
 
+            }
+            complete => {
+                error!(logger, "Client connection down.", );
+                break;
             }
         }
     }

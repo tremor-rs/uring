@@ -293,7 +293,6 @@ async fn handle_tick(
                     }
                 }
             },
-
             Some(Task::HandoffInStart { vnode, src }) => {
                 vnodes.remove(&vnode);
                 vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(Handoff{partner: src, chunk: 0, direction: Direction::Inbound})});

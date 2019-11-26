@@ -85,7 +85,6 @@ websocat ws://localhost:8081/uring
 {"Delete": {"rid": 2, "key": "snot"}}
 
 {"Get": {"rid": 2, "key": "snot"}}
-
 ```
 
 ```bash
