@@ -353,7 +353,7 @@ mod test {
 
         assert_move!(r, "n1", "n2", &[0, 1]);
         assert_move!(r, "n2", "n3", &[3]);
-        assert!(dbg!(r).is_empty());
+        assert!(r.is_empty());
 
         let (p, mut r) = Strategy::remove_node(8, p, "n2".into());
         assert_eq!(

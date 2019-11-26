@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2018-2019, Wayfair GmbH
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,22 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys;
-import time;
-import os;
-import signal;
-import subprocess;
-import requests;
-import simplejson;
-import websocket;
-import threading;
+import sys
+import time
+import os
+import signal
+import subprocess
+import requests
+import simplejson
+import websocket
+import threading
 
 #
 # Simple ( simplistic ) library for driving test scripts
 #
 
+
 def rotate(arr):
-     return arr[1:] + [arr[0]]
+    return arr[1:] + [arr[0]]
+
 
 class Cluster():
     """Encapsulates a uring cluster"""
@@ -39,7 +42,7 @@ class Cluster():
 
     def configure(self, config_file):
         self.config = simplejson.load(open(config_file, 'r'))
-        ports = [];
+        ports = []
         for node in self.config:
             ports = ports + [node['port']]
 
@@ -79,7 +82,8 @@ class Cluster():
             id = node['id']
             if id != '1':
                 print(f'Registering cluster node {id}')
-                requests.post("http://127.0.0.1:8081/node/{}".format(id))
+                requests.post("http://127.0.0.1:9081/uring/{}".format(id))
+
 
 class UringServer():
     """Handles interactions with uring (raft) instance."""
@@ -106,16 +110,18 @@ class UringServer():
         endpoint = self.node_ports[0]
         peers = self.node_ports[1:]
         pwd = os.path.join(os.path.dirname(__file__))
-        cmd = os.path.join(pwd, "../target/debug/uring -e 127.0.0.1:{} ".format(endpoint))
+        cmd = os.path.join(
+            pwd, "../target/debug/uring -n -e 127.0.0.1:{} ".format(endpoint))
         for peer in peers:
-          cmd += "-p 127.0.0.1:{} ".format(peer)
+            cmd += "-p 127.0.0.1:{} ".format(peer)
         if self.bootstrap:
             cmd += " -b"
         cmd += " -i{}".format(self.id)
+        cmd += " --http 127.0.0.1:{}".format(endpoint + 1000)
 
-#        print(cmd)
+        print(cmd)
 
-        self.cmd = subprocess.Popen(cmd, cwd = './', shell=True)
+        self.cmd = subprocess.Popen(cmd, cwd='./', shell=True)
         print("Started process with id: {}".format(self.cmd.pid))
 
     def pid(self):
@@ -124,26 +130,30 @@ class UringServer():
     def die(self):
         self.cmd.kill()
 
+
 def synchronized(method):
     def f(*args):
         self = args[0]
-        self.mutex.acquire();
+        self.mutex.acquire()
         try:
             return apply(method, args)
         finally:
-            self.mutex.release();
+            self.mutex.release()
         return f
 
+
 def synchronize(kclazz, names=None):
-    if type(names)==type(''):
+    if type(names) == type(''):
         names = names.split()
-    for (name, method_handle) in klazz.__dict.items():
+    for (name, method_handle) in kclazz.__dict.items():
         if callable(name) and name != '__init__' and (names == None or name in names):
-            klazz.__dict__[name] = synchronized(method_handle)
+            kclazz.__dict__[name] = synchronized(method_handle)
+
 
 class Synchronizer:
     def __init__(self):
         self.mutex = threading.RLock()
+
 
 class ChannelObserver(Synchronizer):
     def __init__(self):
@@ -156,7 +166,6 @@ class ChannelObserver(Synchronizer):
             self.obs[channel].append(handler)
         else:
             self.obs[channel] = [handler]
-    
 
 
 class RaftClient(ChannelObserver):
@@ -197,16 +206,17 @@ class RaftClient(ChannelObserver):
             on_error=self.on_error,
             on_close=self.on_close,
         )
-        self.wsc_thread = threading.Thread(name='wsc', target=self.ws.run_forever)
+        self.wsc_thread = threading.Thread(
+            name='wsc', target=self.ws.run_forever)
         self.wsc_thread.setDaemon(True)
         self.wsc_thread.start()
 
-    def select(self, protocol):        
+    def select(self, protocol):
         self.ws.send(simplejson.dumps({
-            "Select": {"rid": self.rid, "protocol": protocol }
+            "Select": {"rid": self.rid, "protocol": protocol}
         }))
         self.rid = self.rid + 1
-    
+
     def execute_as(self, protocol, json):
         self.ws.send(simplejson.dumps(
             {
@@ -245,7 +255,7 @@ class RaftClient(ChannelObserver):
             }
         }))
         self.rid = self.rid + 1
-    
+
     def kv_cas(self, key, check, store):
         self.ws.send(simplejson.dumps({
             "Cas": {
@@ -310,38 +320,43 @@ class RaftClient(ChannelObserver):
 
     def on(self, msg_type, handler):
         if msg_type in self.handlers:
-            raise RuntimeError('Handler for message type ' + msg_type + ' already registered')
-        self.handlers[msg_type] = handler;
+            raise RuntimeError('Handler for message type ' +
+                               msg_type + ' already registered')
+        self.handlers[msg_type] = handler
 
     def status(self):
         url = "http://{}:{}/status"
-        headers = { 'Content-type': 'application/json' }
-        response = requests.get(url.format(self.host, self.port), headers=headers, timeout=1);
+        headers = {'Content-type': 'application/json'}
+        response = requests.get(url.format(
+            self.host, self.port), headers=headers, timeout=1)
         return response
 
     def register(self):
-        url = "http://{}:{}/node/{}"
-        response = requests.post(url.format(self.host, self.port, self.node_id));
+        url = "http://{}:{}/uring/{}"
+        response = requests.post(url.format(
+            self.host, self.port, self.node_id))
         return response
 
-    def get(self,k):
-        url = "http://{}:{}/data/{}"
-        response = requests.get(url.format(self.host, self.port, k));
+    def get(self, k):
+        url = "http://{}:{}/kv/{}"
+        response = requests.get(url.format(self.host, self.port, k))
         return response
 
-    def put(self,k,v):
-        url = "http://{}:{}/data/{}"
-        headers = { 'Content-type': 'application/json' }
-        response = requests.post(url.format(self.host, self.port, k), v, headers=headers);
+    def put(self, k, v):
+        url = "http://{}:{}/kv/{}"
+        headers = {'Content-type': 'application/json'}
+        response = requests.post(url.format(
+            self.host, self.port, k), v, headers=headers)
         return response
 
-    def cas(self,k,v):
-        url = "http://{}:{}/data/{}/cas"
-        headers = { 'Content-type': 'application/json' }
-        response = requests.post(url.format(self.host, self.port, k), v, headers=headers);
+    def cas(self, k, v):
+        url = "http://{}:{}/kv/{}/cas"
+        headers = {'Content-type': 'application/json'}
+        response = requests.post(url.format(
+            self.host, self.port, k), v, headers=headers)
         return response
 
-    def delete(self,k):
-        url = "http://{}:{}/data/{}"
-        response = requests.delete(url.format(self.host, self.port, k));
+    def delete(self, k):
+        url = "http://{}:{}/kv/{}"
+        response = requests.delete(url.format(self.host, self.port, k))
         return response

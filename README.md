@@ -6,14 +6,14 @@ to evaluate adopting raft-rs.
 ```bash
 # start first node and clear current cache
 rm -rf raft-rocks-*
-cargo run -- -e 127.0.0.1:8081 -p 127.0.0.1:8082 -p 127.0.0.1:8083 -i1 -n -b -r 64
+cargo run -- -e 127.0.0.1:8081 -p 127.0.0.1:8082 -p 127.0.0.1:8083 -i1 -n --http 127.0.0.1:9081  -b -r 64
 # join second node
-cargo run -- -e 127.0.0.1:8082 -p 127.0.0.1:8081 -p 127.0.0.1:8083 -i2 -n
+cargo run -- -e 127.0.0.1:8082 -p 127.0.0.1:8081 -p 127.0.0.1:8083 -i2 -n --http 127.0.0.1:9082
 # join third node
-cargo run -- -e 127.0.0.1:8083 -p 127.0.0.1:8081 -p 127.0.0.1:8082 -i3 -n
+cargo run -- -e 127.0.0.1:8083 -p 127.0.0.1:8081 -p 127.0.0.1:8082 -i3 -n --http 127.0.0.1:9083
 # activate nodes in raft group (triggers AddNode message)
-curl -X POST 127.0.0.1:8081/node/2
-curl -X POST 127.0.0.1:8081/node/3
+curl -X POST http://127.0.0.1:9081/node/2
+curl -X POST http://127.0.0.1:9081/node/3
 
 # kill node 1
 # restart node 1
@@ -60,11 +60,11 @@ open http://localhost:8000/coyote.html
 ## vnode
 
 ```bash
-curl -H 'Content-Type: application/json' -X GET http://localhost:8081/mring
-curl -H 'Content-Type: application/json' -X POST -d '{"size":64}' http://localhost:8081/mring
-curl -H 'Content-Type: application/json' -X POST -d '{"node":"n1"}' http://localhost:8081/mring/node
-curl -H 'Content-Type: application/json' -X GET http://localhost:8081/mring/node
-curl -H 'Content-Type: application/json' -X POST -d '{"node":"n2"}' http://localhost:8081/mring/node
+curl -H 'Content-Type: application/json' -X GET http://localhost:9081/mring
+curl -H 'Content-Type: application/json' -X POST -d '{"size":64}' http://localhost:9081/mring
+curl -H 'Content-Type: application/json' -X POST -d '{"node":"n1"}' http://localhost:9081/mring/node
+curl -H 'Content-Type: application/json' -X GET http://localhost:9081/mring/node
+curl -H 'Content-Type: application/json' -X POST -d '{"node":"n2"}' http://localhost:9081/mring/node
 ```
 
 ## ws - kv

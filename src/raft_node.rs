@@ -134,7 +134,7 @@ where
     }
     pub async fn node_loop(&mut self) -> Result<()> {
         let mut ticks = async_std::stream::interval(self.tick_duration);
-
+        let mut i = Instant::now();
         loop {
             select! {
                 msg = self.network.next().fuse() => {
@@ -206,6 +206,12 @@ where
                     if !self.is_running() {
                         continue
                     }
+                    if i.elapsed() >= Duration::from_secs(10) {
+                        self.log();
+                        i = Instant::now();
+                    }
+
+
                     let this_state = self.role();
                     if this_state != &self.last_state {
                         let prev_state = format!("{:?}", self.last_state);
@@ -664,7 +670,6 @@ where
         // TODO: implement transfer leader.
         unimplemented!();
     } else {
-        dbg!("snot");
     }
 
     let last_index2 = raft_group.raft.raft_log.last_index() + 1;

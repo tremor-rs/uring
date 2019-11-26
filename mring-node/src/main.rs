@@ -25,7 +25,7 @@ use async_std::net::SocketAddr;
 use async_std::task;
 use async_tungstenite::connect_async;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use slog::Drain;
 use std::env;
 use tungstenite::protocol::Message;

@@ -1077,6 +1077,7 @@ dependencies = [
  "async-tungstenite 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.103 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.103 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.42 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-async 2.3.0 (registry+https://github.com/rust-lang/crates.io-index)",

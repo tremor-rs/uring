@@ -60,7 +60,6 @@ impl Connection {
         if self.handshake_done {
             if msg.is_binary() {
                 let msg = decode_ws(&msg.into_data());
-                println!("received raft message {:?}", msg);
                 self.master.unbounded_send(UrMsg::RaftMsg(msg)).unwrap();
             } else if msg.is_text() {
                 let msg: CtrlMsg =
@@ -148,13 +147,23 @@ async fn worker(
     let url = url::Url::parse(&format!("ws://{}", endpoint)).unwrap();
     loop {
         let logger = logger.clone();
-        let ws_stream = if let Ok((ws_stream, _)) = connect_async(url.clone()).await {
+        let mut ws_stream = if let Ok((ws_stream, _)) = connect_async(url.clone()).await {
             ws_stream
         } else {
             error!(logger, "Failed to connect to {}", endpoint);
             break;
         };
         let (tx, rx) = unbounded::<WsMessage>();
+        ws_stream
+            .send(Message::Text(
+                serde_json::to_string(&ProtocolSelect::Select {
+                    rid: RequestId(1),
+                    protocol: Protocol::URing,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
         let mut c = Connection {
             logger,
             remote_id: NodeId(0),
@@ -184,9 +193,8 @@ async fn worker(
             }
         }
         c.master
-        .unbounded_send(UrMsg::DownLocal(c.remote_id))
-        .unwrap();
-
+            .unbounded_send(UrMsg::DownLocal(c.remote_id))
+            .unwrap();
     }
 
     Ok(())

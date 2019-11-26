@@ -16,13 +16,12 @@
 use super::Reply as WsReply;
 use super::*;
 use crate::{pubsub, NodeId};
-use async_std::net::{SocketAddr, ToSocketAddrs};
-use async_std::net::{TcpListener, TcpStream};
+use async_std::net::TcpListener;
+use async_std::net::ToSocketAddrs;
 use async_std::task;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::select;
-use futures::StreamExt;
+use futures::{select, FutureExt, StreamExt};
 use std::io::Error;
 use tungstenite::protocol::Message;
 use ws_proto::*;
@@ -108,6 +107,7 @@ impl Connection {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
                 Ok(CtrlMsg::Hello(id, peer)) => {
+                    info!(self.node.logger, "Hello from {}", id);
                     self.remote_id = id;
                     self.node
                         .tx
@@ -327,6 +327,7 @@ impl Connection {
                 }
             };
             if !cont {
+                error!(logger, "Client connection to {} down.", self.remote_id);
                 self.node
                     .tx
                     .unbounded_send(UrMsg::DownRemote(self.remote_id))
@@ -353,13 +354,27 @@ where
     let c = Connection::new(node, msg_rx, response_tx);
     task::spawn(c.msg_loop(logger.clone()));
 
-    while let Some(message) = ws_stream.next().await {
-        let message = message.expect("Failed to get request");
-        msg_tx
-            .unbounded_send(message)
-            .expect("Failed to forward request");
-        if let Some(resp) = response_rx.next().await {
-            ws_stream.send(resp).await.expect("Failed to send response");
+    loop {
+        select! {
+            message = ws_stream.next().fuse() => {
+                if let Some(Ok(message)) = message {
+                    msg_tx
+                    .unbounded_send(message)
+                    .expect("Failed to forward request");
+                } else {
+                    error!(logger, "Client connection down.", );
+                    break;
+                }
+            }
+            resp = response_rx.next() => {
+                if let Some(resp) = resp {
+                    ws_stream.send(resp).await.expect("Failed to send response");
+                } else {
+                    error!(logger, "Client connection down.", );
+                    break;
+                }
+
+            }
         }
     }
 }

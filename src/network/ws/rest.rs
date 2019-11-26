@@ -33,13 +33,14 @@ async fn kv_get(cx: Context<Node>) -> EndpointResult {
     let (tx, mut rx) = unbounded();
     let key: String = cx.param("id").client_err()?;
     let id = key.clone().into_bytes();
+    info!(cx.state().logger, "GET /kv/{}", key);
     cx.state()
         .tx
         .unbounded_send(UrMsg::Get(id.clone(), Reply::Direct(tx)))
         .unwrap();
-    rx.next()
-        .await
-        .and_then(|v| v)
+    dbg!(rx.next()
+        .await)
+        .and_then(|v| dbg!(v))
         .and_then(|v| String::from_utf8(v).ok())
         .ok_or(StatusCode::NOT_FOUND.into())
         .map(|value| KV { key, value })
@@ -56,7 +57,7 @@ async fn kv_post(mut cx: Context<Node>) -> EndpointResult {
     let key: String = cx.param("id").client_err()?;
     let id = key.clone().into_bytes();
     let body: PostBody = cx.body_json().await.client_err()?;
-    info!(cx.state().logger, "POST /kv/{} -> {:?}", key, body);
+    info!(cx.state().logger, "POST /kv/{} -> {}", key, body.value);
 
     cx.state()
         .tx

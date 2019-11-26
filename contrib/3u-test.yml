@@ -4,17 +4,17 @@
 - name: Status ( Pre-Conditions )
   entries:
     - name: GET /status on leader with id 1
-      command: curl -vs --stderr - http://localhost:8081/status
+      command: curl -vs --stderr - http://localhost:9081/status
       stdout_has:
         - HTTP/1.1 200 OK
         - Leader
     - name: GET /status on follower with id 2
-      command: curl -vs --stderr - http://localhost:8082/status
+      command: curl -vs --stderr - http://localhost:9082/status
       stdout_has:
         - HTTP/1.1 200 OK
         - Follower
     - name: GET /status on follower with id 3
-      command: curl -vs --stderr - http://localhost:8083/status
+      command: curl -vs --stderr - http://localhost:9083/status
       stdout_has:
         - HTTP/1.1 200 OK
         - Follower
@@ -22,22 +22,22 @@
 - name: KV store on leader
   entries:
     - name: Get non-existent key/value on leader
-      command: curl -vs --stderr - http://localhost:8081/data/phantom
+      command: curl -vs --stderr - http://localhost:9081/kv/phantom
       stdout_has:
         - HTTP/1.1 404 Not Found
 
     - name: Put fresh key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8081/data/beep --data-binary "{\"value\": \"boop\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9081/kv/beep --data-binary "{\"value\": \"boop\"}"
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Put idempotent key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8081/data/beep --data-binary '{"value": "boop"}'
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9081/kv/beep --data-binary '{"value": "boop"}'
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Get key/value on leader
-      command: curl -vs --stderr - http://localhost:8081/data/beep
+      command: curl -vs --stderr - http://localhost:9081/kv/beep
       stdout_has:
         - HTTP/1.1 200 OK
         - "beep"
@@ -46,38 +46,38 @@
 - name: KV store on follower with id 2
   entries:
     - name: Get non-existent key/value on leader
-      command: curl -vs --stderr - http://localhost:8082/data/phantom
+      command: curl -vs --stderr - http://localhost:9082/kv/phantom
       stdout_has:
         - HTTP/1.1 404 Not Found
 
     - name: Put fresh key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/beep --data-binary "{\"value\": \"boop\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/beep --data-binary "{\"value\": \"boop\"}"
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Put idempotent key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/beep --data-binary '{"value": "boop"}'
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/beep --data-binary '{"value": "boop"}'
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Get key/value on leader
-      command: curl -vs --stderr - http://localhost:8082/data/beep
+      command: curl -vs --stderr - http://localhost:9082/kv/beep
       stdout_has:
         - HTTP/1.1 200 OK
         - "beep"
         - "boop"
     - name: CAS fresh key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
       stdout_has:
         - HTTP/1.1 201 Created
     - name: CAS idempotent key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8082/data/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Get key/value on leader
-      command: curl -vs --stderr - http://localhost:8082/data/meep
+      command: curl -vs --stderr - http://localhost:9082/kv/meep
       stdout_has:
         - HTTP/1.1 200 OK
         - "meep"
@@ -86,50 +86,50 @@
 - name: KV store on follower with id 3
   entries:
     - name: Get non-existent key/value on leader
-      command: curl -vs --stderr - http://localhost:8083/data/phantom
+      command: curl -vs --stderr - http://localhost:9083/kv/phantom
       stdout_has:
         - HTTP/1.1 404 Not Found
 
     - name: Put fresh key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/fleek --data-binary "{\"value\": \"boop\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/fleek --data-binary "{\"value\": \"boop\"}"
       stdout_has:
 
 - name: KV store on follower with id 3
   entries:
     - name: Get non-existent key/value on leader
-      command: curl -vs --stderr - http://localhost:8083/data/phantom
+      command: curl -vs --stderr - http://localhost:9083/kv/phantom
       stdout_has:
         - HTTP/1.1 404 Not Found
 
     - name: Put fresh key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/fleek --data-binary "{\"value\": \"boop\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/fleek --data-binary "{\"value\": \"boop\"}"
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Put idempotent key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/fleek --data-binary '{"value": "boop"}'
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/fleek --data-binary '{"value": "boop"}'
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Get key/value on leader
-      command: curl -vs --stderr - http://localhost:8083/data/fleek
+      command: curl -vs --stderr - http://localhost:9083/kv/fleek
       stdout_has:
         - HTTP/1.1 200 OK
         - "fleek"
         - "boop"
     - name: CAS fresh key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
       stdout_has:
         - HTTP/1.1 201 Created
     - name: CAS idempotent key/value on leader
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:8083/data/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Get key/value on leader
-      command: curl -vs --stderr - http://localhost:8083/data/meep
+      command: curl -vs --stderr - http://localhost:9083/kv/meep
       stdout_has:
         - HTTP/1.1 200 OK
         - "meep"
@@ -138,17 +138,17 @@
 - name: Status ( Post-Conditions )
   entries:
     - name: GET /status on leader with id 1
-      command: curl -vs --stderr - http://localhost:8081/status
+      command: curl -vs --stderr - http://localhost:9081/status
       stdout_has:
         - HTTP/1.1 200 OK
         - Leader
     - name: GET /status on follower with id 2
-      command: curl -vs --stderr - http://localhost:8082/status
+      command: curl -vs --stderr - http://localhost:9082/status
       stdout_has:
         - HTTP/1.1 200 OK
         - Follower
     - name: GET /status on follower with id 3
-      command: curl -vs --stderr - http://localhost:8083/status
+      command: curl -vs --stderr - http://localhost:9083/status
       stdout_has:
         - HTTP/1.1 200 OK
         - Follower

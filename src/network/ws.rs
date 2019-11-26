@@ -344,6 +344,7 @@ impl NetworkTrait for Network {
 
 /// do websocket handshake and start `client::Connection` actor
 
+#[derive(Debug)]
 pub enum WsMessage {
     Ctrl(CtrlMsg),
     Raft(RaftMessage),
