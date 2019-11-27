@@ -16,10 +16,11 @@ use super::*;
 use async_std::net::ToSocketAddrs;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
-use futures::channel::mpsc::UnboundedSender;
+use futures::channel::mpsc::{Sender, channel};
 use futures::StreamExt;
 use slog::Logger;
 use tungstenite::protocol::Message;
+use futures::sink::SinkExt;
 
 async fn handle_connection(logger: Logger, mut connection: Connection) {
     while let Some(msg) = connection.rx.next().await {
@@ -33,14 +34,14 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                 connection.vnode = Some(vnode);
                 connection
                     .tasks
-                    .unbounded_send(Task::HandoffInStart { src, vnode })
+                    .send(Task::HandoffInStart { src, vnode }).await
                     .unwrap();
                 info!(logger, "handoff for node {} started", vnode);
                 connection
                     .tx
-                    .unbounded_send(Message::text(
+                    .send(Message::text(
                         serde_json::to_string(&HandoffAck::Start { vnode }).unwrap(),
-                    ))
+                    )).await
                     .expect("Failed to forward message");
             }
             Ok(HandoffMsg::Data { vnode, data, chunk }) => {
@@ -48,13 +49,13 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     assert_eq!(vnode, vnode_current);
                     connection
                         .tasks
-                        .unbounded_send(Task::HandoffIn { data, vnode, chunk })
+                        .send(Task::HandoffIn { data, vnode, chunk }).await
                         .unwrap();
                     connection
                         .tx
-                        .unbounded_send(Message::text(
+                        .send(Message::text(
                             serde_json::to_string(&HandoffAck::Data { chunk: chunk }).unwrap(),
-                        ))
+                        )).await
                         .expect("Failed to forward message");
                 }
             }
@@ -63,13 +64,13 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     assert_eq!(node_id, vnode);
                     connection
                         .tasks
-                        .unbounded_send(Task::HandoffInEnd { vnode })
+                        .send(Task::HandoffInEnd { vnode }).await
                         .unwrap();
                     connection
                         .tx
-                        .unbounded_send(Message::text(
+                        .send(Message::text(
                             serde_json::to_string(&HandoffAck::Finish { vnode }).unwrap(),
-                        ))
+                        )).await
                         .expect("Failed to forward message");
                 }
                 connection.vnode = None;
@@ -80,7 +81,7 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
     }
 }
 
-async fn accept_connection(logger: Logger, stream: TcpStream, tasks: UnboundedSender<Task>) {
+async fn accept_connection(logger: Logger, stream: TcpStream, tasks: Sender<Task>) {
     let addr = stream
         .peer_addr()
         .expect("connected streams should have a peer address");
@@ -95,8 +96,8 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: UnboundedSe
     // Create a channel for our stream, which other sockets will use to
     // send us messages. Then register our address with the stream to send
     // data to us.
-    let (msg_tx, msg_rx) = futures::channel::mpsc::unbounded();
-    let (response_tx, mut response_rx) = futures::channel::mpsc::unbounded();
+    let (mut msg_tx, msg_rx) = channel(64);
+    let (response_tx, mut response_rx) = channel(64);
     let c = Connection {
         addr: addr,
         rx: msg_rx,
@@ -108,7 +109,7 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: UnboundedSe
 
     while let Some(Ok(message)) = ws_stream.next().await {
         msg_tx
-            .unbounded_send(message)
+            .send(message).await
             .expect("Failed to forward request");
         if let Some(resp) = response_rx.next().await {
             if ws_stream.send(resp).await.is_err() {
@@ -122,7 +123,7 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: UnboundedSe
 pub(crate) async fn server_loop(
     logger: Logger,
     addr: String,
-    tasks: UnboundedSender<Task>,
+    tasks: Sender<Task>,
 ) -> Result<(), std::io::Error> {
     let addr = addr
         .to_socket_addrs()

@@ -24,7 +24,7 @@ use vnode_manager::*;
 use async_std::net::SocketAddr;
 use async_std::task;
 use async_tungstenite::connect_async;
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::{channel, Receiver, Sender};
 use serde_derive::{Deserialize, Serialize};
 use slog::Drain;
 use std::env;
@@ -75,9 +75,9 @@ enum Task {
 
 struct Connection {
     addr: SocketAddr,
-    rx: UnboundedReceiver<Message>,
-    tx: UnboundedSender<Message>,
-    tasks: UnboundedSender<Task>,
+    rx: Receiver<Message>,
+    tx: Sender<Message>,
+    tasks: Sender<Task>,
     vnode: Option<u64>,
 }
 
@@ -110,7 +110,7 @@ fn main() {
     let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root(drain, o!());
 
-    let (tasks_tx, tasks_rx) = futures::channel::mpsc::unbounded();
+    let (tasks_tx, tasks_rx) = channel(64);
 
     let local = env::args()
         .nth(1)

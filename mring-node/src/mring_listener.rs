@@ -14,8 +14,8 @@
 
 use super::*;
 use async_tungstenite::connect_async;
-use futures::channel::mpsc::UnboundedSender;
-use futures::{select, FutureExt, StreamExt};
+use futures::channel::mpsc::Sender;
+use futures::{select, FutureExt, StreamExt, SinkExt};
 use slog::Logger;
 use tungstenite::protocol::Message;
 use uring_common::{MRingNodes, Relocations, RequestId};
@@ -25,7 +25,7 @@ pub(crate) async fn run(
     logger: Logger,
     id: String,
     connect_addr: String,
-    mut tasks: UnboundedSender<Task>,
+    mut tasks: Sender<Task>,
 ) {
     let url = url::Url::parse(&connect_addr).unwrap();
 
@@ -100,7 +100,7 @@ pub(crate) async fn run(
     }
 }
 
-async fn handle_msg(logger: &Logger, id: &str, tasks: &mut UnboundedSender<Task>, msg: Vec<u8>) {
+async fn handle_msg(logger: &Logger, id: &str, tasks: &mut Sender<Task>, msg: Vec<u8>) {
     match serde_json::from_slice(&msg) {
         Ok(SubscriberMsg::Msg { msg, .. }) => match serde_json::from_value(msg) {
             Ok(PSMRing::SetSize { size, .. }) => info!(logger, "Size set to {}", size),
@@ -142,7 +142,7 @@ async fn handle_msg(logger: &Logger, id: &str, tasks: &mut UnboundedSender<Task>
 async fn handle_change(
     _logger: &Logger,
     id: &str,
-    tasks: &mut UnboundedSender<Task>,
+    tasks: &mut Sender<Task>,
     mut relocations: Relocations,
     next: MRingNodes,
 ) {
@@ -150,9 +150,9 @@ async fn handle_change(
     if relocations.is_empty() {
         if let Some(vnode) = next.into_iter().filter(|v| v.id == id).next() {
             tasks
-                .unbounded_send(Task::Assign {
+                .send(Task::Assign {
                     vnodes: vnode.vnodes,
-                })
+                }).await
                 .unwrap();
         }
     } else {
@@ -161,7 +161,7 @@ async fn handle_change(
                 for vnode in ids {
                     let target = target.clone();
                     tasks
-                        .unbounded_send(Task::HandoffOut { target, vnode })
+                        .send(Task::HandoffOut { target, vnode }).await
                         .unwrap();
                 }
             }
