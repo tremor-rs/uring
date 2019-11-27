@@ -45,39 +45,39 @@
 
 - name: KV store on follower with id 2
   entries:
-    - name: Get non-existent key/value on leader
+    - name: Get non-existent key/value on node 2
       command: curl -vs --stderr - http://localhost:9082/kv/phantom
       stdout_has:
         - HTTP/1.1 404 Not Found
 
-    - name: Put fresh key/value on leader
+    - name: Put fresh key/value on node 2
       command: |
         curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/beep --data-binary "{\"value\": \"boop\"}"
       stdout_has:
         - HTTP/1.1 201 Created
-    - name: Put idempotent key/value on leader
+    - name: Put idempotent key/value on node 2
       command: |
         curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/beep --data-binary '{"value": "boop"}'
       stdout_has:
         - HTTP/1.1 201 Created
-    - name: Get key/value on leader
+    - name: Get key/value on node 2
       command: curl -vs --stderr - http://localhost:9082/kv/beep
       stdout_has:
         - HTTP/1.1 200 OK
         - "beep"
         - "boop"
-    - name: CAS fresh key/value on leader
+    - name: CAS fresh key/value on node 2
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/meep2/cas --data-binary "{\"store\": \"snot\"}"
       stdout_has:
         - HTTP/1.1 201 Created
-    - name: CAS idempotent key/value on leader
+    - name: CAS idempotent key/value on node 2
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9082/kv/beep/cas --data-binary '{"check": "boop", "store": "snot"}'
       stdout_has:
         - HTTP/1.1 201 Created
-    - name: Get key/value on leader
-      command: curl -vs --stderr - http://localhost:9082/kv/meep
+    - name: Get key/value on node 2
+      command: curl -vs --stderr - http://localhost:9082/kv/meep2
       stdout_has:
         - HTTP/1.1 200 OK
         - "meep"
@@ -85,12 +85,12 @@
 
 - name: KV store on follower with id 3
   entries:
-    - name: Get non-existent key/value on leader
+    - name: Get non-existent key/value on node 3
       command: curl -vs --stderr - http://localhost:9083/kv/phantom
       stdout_has:
         - HTTP/1.1 404 Not Found
 
-    - name: Put fresh key/value on leader
+    - name: Put fresh key/value on node 3
       command: |
         curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/fleek --data-binary "{\"value\": \"boop\"}"
       stdout_has:
@@ -102,34 +102,34 @@
       stdout_has:
         - HTTP/1.1 404 Not Found
 
-    - name: Put fresh key/value on leader
+    - name: Put fresh key/value on node 3
       command: |
         curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/fleek --data-binary "{\"value\": \"boop\"}"
       stdout_has:
         - HTTP/1.1 201 Created
-    - name: Put idempotent key/value on leader
+    - name: Put idempotent key/value on node 3
       command: |
         curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/fleek --data-binary '{"value": "boop"}'
       stdout_has:
         - HTTP/1.1 201 Created
-    - name: Get key/value on leader
+    - name: Get key/value on node 3
       command: curl -vs --stderr - http://localhost:9083/kv/fleek
       stdout_has:
         - HTTP/1.1 200 OK
         - "fleek"
         - "boop"
-    - name: CAS fresh key/value on leader
+    - name: CAS fresh key/value on node 3
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/meep/cas --data-binary "{\"check\": \"boop\", \"store\": \"snot\"}"
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/meep3/cas --data-binary "{\"store\": \"snot\"}"
       stdout_has:
         - HTTP/1.1 201 Created
-    - name: CAS idempotent key/value on leader
+    - name: CAS idempotent key/value on node 3
       command: |
-        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/meep/cas --data-binary '{"check": "boop", "store": "snot"}'
+        curl -vs --stderr - -H "Content-type: application/json" http://localhost:9083/kv/fleek/cas --data-binary '{"check": "boop", "store": "snot"}'
       stdout_has:
         - HTTP/1.1 201 Created
     - name: Get key/value on leader
-      command: curl -vs --stderr - http://localhost:9083/kv/meep
+      command: curl -vs --stderr - http://localhost:9083/kv/meep3
       stdout_has:
         - HTTP/1.1 200 OK
         - "meep"
