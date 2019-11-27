@@ -32,8 +32,8 @@ pub(crate) struct Connection {
     node: Node,
     remote_id: NodeId,
     protocol: Option<Protocol>,
-    rx: UnboundedReceiver<Message>,
-    tx: UnboundedSender<Message>,
+    rx: Receiver<Message>,
+    tx: Sender<Message>,
     ws_rx: Receiver<WsMessage>,
     ws_tx: Sender<WsMessage>,
     ps_rx: Receiver<SubscriberMsg>,
@@ -43,8 +43,8 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) fn new(
         node: Node,
-        rx: UnboundedReceiver<Message>,
-        tx: UnboundedSender<Message>,
+        rx: Receiver<Message>,
+        tx: Sender<Message>,
     ) -> Self {
         let (ps_tx, ps_rx) = channel(64);
         let (ws_tx, ws_rx) = channel(64);
@@ -68,10 +68,10 @@ impl Connection {
                 Ok(ProtocolSelect::Select { rid, protocol }) => {
                     self.protocol = Some(protocol);
                     self.tx
-                        .unbounded_send(Message::Text(
+                        .send(Message::Text(
                             serde_json::to_string(&ProtocolSelect::Selected { rid, protocol })
                                 .unwrap(),
-                        ))
+                        )).await
                         .is_ok()
                 }
                 Ok(ProtocolSelect::Selected { .. }) => false,
@@ -297,21 +297,21 @@ impl Connection {
                 msg = self.ws_rx.next() => {
                     match self.protocol {
                         None | Some(Protocol::KV) | Some(Protocol::MRing) => match msg {
-                            Some(WsMessage::Ctrl(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
-                            Some(WsMessage::Reply(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
+                            Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            Some(WsMessage::Reply(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
                             None | Some(WsMessage::Raft(_)) => false,
                         }
                         Some(Protocol::URing) => match msg {
-                            Some(WsMessage::Ctrl(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
-                            Some(WsMessage::Raft(msg)) => self.tx.unbounded_send(Message::Binary(encode_ws(msg).to_vec())).is_ok(),
-                            Some(WsMessage::Reply(msg)) =>self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok(),
+                            Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            Some(WsMessage::Raft(msg)) => self.tx.send(Message::Binary(encode_ws(msg).to_vec())).await.is_ok(),
+                            Some(WsMessage::Reply(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
                             None => false,
                         },
                     }
                 }
                 msg = self.ps_rx.next() => {
                     if let Some(msg) = msg {
-                        self.tx.unbounded_send(Message::Text(serde_json::to_string(&msg).unwrap())).is_ok()
+                        self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()
                     } else {
                         false
                     }
@@ -344,8 +344,8 @@ where
     // Create a channel for our stream, which other sockets will use to
     // send us messages. Then register our address with the stream to send
     // data to us.
-    let (msg_tx, msg_rx) = futures::channel::mpsc::unbounded();
-    let (response_tx, mut response_rx) = futures::channel::mpsc::unbounded();
+    let (mut msg_tx, msg_rx) = channel(64);
+    let (response_tx, mut response_rx) = channel(64);
     let c = Connection::new(node, msg_rx, response_tx);
     task::spawn(c.msg_loop(logger.clone()));
 
@@ -354,7 +354,7 @@ where
             message = ws_stream.next().fuse() => {
                 if let Some(Ok(message)) = message {
                     msg_tx
-                    .unbounded_send(message)
+                    .send(message).await
                     .expect("Failed to forward request");
                 } else {
                     error!(logger, "Client connection down.", );
