@@ -173,8 +173,7 @@ impl Connection {
                         key.into_bytes(),
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))
-                    .unwrap();
-                true
+                    .is_ok()
             }
             KVRequest::Put { rid, key, store } => {
                 self.node
@@ -184,8 +183,7 @@ impl Connection {
                         store.into_bytes(),
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))
-                    .unwrap();
-                true
+                    .is_ok()
             }
             KVRequest::Delete { rid, key } => {
                 self.node
@@ -194,8 +192,7 @@ impl Connection {
                         key.into_bytes(),
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))
-                    .unwrap();
-                true
+                    .is_ok()
             }
             KVRequest::Cas {
                 rid,
@@ -211,8 +208,7 @@ impl Connection {
                         store.into_bytes(),
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))
-                    .unwrap();
-                true
+                    .is_ok()
             }
         }
     }
@@ -243,8 +239,7 @@ impl Connection {
                 self.node
                     .tx
                     .unbounded_send(UrMsg::MRingGetSize(WsReply::WS(rid, self.ws_tx.clone())))
-                    .unwrap();
-                true
+                    .is_ok()
             }
 
             MRRequest::SetSize { rid, size } => {
@@ -254,15 +249,13 @@ impl Connection {
                         size,
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))
-                    .unwrap();
-                true
+                    .is_ok()
             }
             MRRequest::GetNodes { rid } => {
                 self.node
                     .tx
                     .unbounded_send(UrMsg::MRingGetNodes(WsReply::WS(rid, self.ws_tx.clone())))
-                    .unwrap();
-                true
+                    .is_ok()
             }
             MRRequest::AddNode { rid, node } => {
                 self.node
@@ -271,8 +264,7 @@ impl Connection {
                         node,
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))
-                    .unwrap();
-                true
+                    .is_ok()
             }
             MRRequest::RemoveNode { rid, node } => {
                 self.node
@@ -281,8 +273,7 @@ impl Connection {
                         node,
                         WsReply::WS(rid, self.ws_tx.clone()),
                     ))
-                    .unwrap();
-                true
+                    .is_ok()
             }
         }
     }
