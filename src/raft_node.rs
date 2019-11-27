@@ -680,10 +680,6 @@ where
     }
 }
 
-pub struct RequestInfo {
-    from: NodeId,
-    eid: EventId,
-}
 pub struct Proposal {
     id: ProposalId,
     proposer: NodeId, // node id of the proposer

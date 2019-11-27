@@ -19,7 +19,7 @@ use crate::{pubsub, NodeId};
 use async_std::net::TcpListener;
 use async_std::net::ToSocketAddrs;
 use async_std::task;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::{select, FutureExt, StreamExt, SinkExt};
 use std::io::Error;
@@ -34,10 +34,10 @@ pub(crate) struct Connection {
     protocol: Option<Protocol>,
     rx: UnboundedReceiver<Message>,
     tx: UnboundedSender<Message>,
-    ws_rx: UnboundedReceiver<WsMessage>,
-    ws_tx: UnboundedSender<WsMessage>,
-    ps_rx: UnboundedReceiver<SubscriberMsg>,
-    ps_tx: UnboundedSender<SubscriberMsg>,
+    ws_rx: Receiver<WsMessage>,
+    ws_tx: Sender<WsMessage>,
+    ps_rx: Receiver<SubscriberMsg>,
+    ps_tx: Sender<SubscriberMsg>,
 }
 
 impl Connection {
@@ -46,8 +46,8 @@ impl Connection {
         rx: UnboundedReceiver<Message>,
         tx: UnboundedSender<Message>,
     ) -> Self {
-        let (ps_tx, ps_rx) = unbounded();
-        let (ws_tx, ws_rx) = unbounded();
+        let (ps_tx, ps_rx) = channel(64);
+        let (ws_tx, ws_rx) = channel(64);
         Self {
             node,
             remote_id: NodeId(0),
