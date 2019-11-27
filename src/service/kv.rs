@@ -17,6 +17,7 @@ use crate::{pubsub, storage, ServiceId};
 use async_trait::async_trait;
 use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
+use futures::SinkExt;
 
 pub const ID: ServiceId = ServiceId(0);
 
@@ -107,7 +108,7 @@ where
     async fn execute(
         &mut self,
         storage: &Storage,
-        pubsub: &pubsub::Channel,
+        pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
         match serde_json::from_slice(&event) {
@@ -143,10 +144,10 @@ where
                 })
                 .unwrap();
                 pubsub
-                    .unbounded_send(pubsub::Msg::Msg {
+                    .send(pubsub::Msg::Msg {
                         channel: "kv".into(),
                         msg: msg,
-                    })
+                    }).await
                     .unwrap();
                 Ok(old.and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
             }
@@ -173,10 +174,10 @@ where
                     })
                     .unwrap();
                     pubsub
-                        .unbounded_send(pubsub::Msg::Msg {
+                        .send(pubsub::Msg::Msg {
                             channel: "kv".into(),
                             msg: msg,
-                        })
+                        }).await
                         .unwrap();
                     if let Some(conflict) = conflict {
                         Ok(Some(
@@ -196,10 +197,10 @@ where
                     })
                     .unwrap();
                     pubsub
-                        .unbounded_send(pubsub::Msg::Msg {
+                        .send(pubsub::Msg::Msg {
                             channel: "kv".into(),
                             msg: msg,
-                        })
+                        }).await
                         .unwrap();
                     Ok(None)
                 }

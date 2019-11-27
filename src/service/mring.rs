@@ -23,7 +23,7 @@ use std::io::Cursor;
 use std::marker::PhantomData;
 use uring_common::{MRingNodes, Relocations};
 use ws_proto::PSMRing;
-
+use futures::SinkExt;
 pub const ID: ServiceId = ServiceId(1);
 
 pub struct Service<Placement>
@@ -111,7 +111,7 @@ where
     async fn execute(
         &mut self,
         storage: &Storage,
-        pubsub: &pubsub::Channel,
+        pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
         match serde_json::from_slice(&event) {
@@ -133,13 +133,13 @@ where
                 };
 
                 pubsub
-                    .unbounded_send(pubsub::Msg::new(
+                    .send(pubsub::Msg::new(
                         "mring",
                         PSMRing::SetSize {
                             size,
                             strategy: Placement::name(),
                         },
-                    ))
+                    )).await
                     .unwrap();
 
                 Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
@@ -154,7 +154,7 @@ where
                 let next = if let Some(current) = self.nodes(storage).await {
                     let (next, relocations) = Placement::add_node(size, current, node.clone());
                     pubsub
-                        .unbounded_send(pubsub::Msg::new(
+                        .send(pubsub::Msg::new(
                             "mring",
                             PSMRing::NodeAdded {
                                 node,
@@ -162,14 +162,14 @@ where
                                 next: next.clone(),
                                 relocations,
                             },
-                        ))
+                        )).await
                         .unwrap();
                     next
                 } else {
                     let next = Placement::new(size, node.clone());
 
                     pubsub
-                        .unbounded_send(pubsub::Msg::new(
+                        .send(pubsub::Msg::new(
                             "mring",
                             PSMRing::NodeAdded {
                                 node,
@@ -177,7 +177,7 @@ where
                                 next: next.clone(),
                                 relocations: Relocations::new(),
                             },
-                        ))
+                        )).await
                         .unwrap();
                     next
                 };
@@ -195,7 +195,7 @@ where
                 if let Some(current) = self.nodes(storage).await {
                     let (next, relocations) = Placement::remove_node(size, current, node.clone());
                     pubsub
-                        .unbounded_send(pubsub::Msg::new(
+                        .send(pubsub::Msg::new(
                             "mring",
                             PSMRing::NodeRemoved {
                                 node,
@@ -203,7 +203,7 @@ where
                                 next: next.clone(),
                                 relocations,
                             },
-                        ))
+                        )).await
                         .unwrap();
                     let next = serde_json::to_vec(&next).unwrap();
                     storage.put(mring::ID.0 as u16, NODES, &next);

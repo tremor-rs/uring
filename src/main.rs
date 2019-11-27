@@ -84,10 +84,11 @@ async fn raft_loop<N: Network>(
 
     if let Some(size) = ring_size {
         if bootstrap {
+            let (storage, pubsub) = node.sotrage_and_pubsub();
             vnode
                 .execute(
-                    node.storage(),
-                    node.pubsub(),
+                    storage,
+                    pubsub,
                     service::mring::Event::set_size(size),
                 )
                 .await

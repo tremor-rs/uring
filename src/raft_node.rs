@@ -24,6 +24,7 @@ use slog::Logger;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+use futures::SinkExt;
 
 fn example_config() -> Config {
     Config {
@@ -69,7 +70,7 @@ where
     proposal_id: u64,
     tick_duration: Duration,
     services: HashMap<ServiceId, Box<dyn Service<Storage>>>,
-    pubsub: pubsub::Channel,
+    pub pubsub: pubsub::Channel,
     last_state: StateRole,
 }
 
@@ -127,8 +128,12 @@ where
     pub fn storage(&self) -> &Storage {
         &self.raft_group.as_ref().unwrap().raft.raft_log.store
     }
-    pub fn pubsub(&self) -> &pubsub::Channel {
-        &self.pubsub
+    pub fn pubsub(&mut self) -> &mut pubsub::Channel {
+        &mut self.pubsub
+    }
+    pub fn sotrage_and_pubsub(&mut self) -> (&Storage, &mut pubsub::Channel) {
+        (&self.raft_group.as_ref().unwrap().raft.raft_log.store, &mut self.pubsub)
+
     }
     pub async fn node_loop(&mut self) -> Result<()> {
         let mut ticks = async_std::stream::interval(self.tick_duration);
@@ -150,7 +155,7 @@ where
                             if let Some(service) = self.services.get_mut(&sid) {
                                 if service.is_local(&data).unwrap() {
                                     let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
-                                    let value = service.execute(store, &self.pubsub, data).await.unwrap();
+                                    let value = service.execute(store, &mut self.pubsub, data).await.unwrap();
                                     self.network.event_reply(eid, value).await.unwrap();
                                 } else {
                                     let pid = self.next_pid();
@@ -173,7 +178,7 @@ where
                         }
                         RaftNetworkMsg::AddNode(id, reply) => {
                             info!(self.logger, "Adding node"; "id" => id);
-                            reply.unbounded_send(self.add_node(id)).unwrap();
+                            reply.unbounded_send(self.add_node(id).await).unwrap();
                         }
                         RaftNetworkMsg::AckProposal(pid, success) => {
                             info!(self.logger, "proposal acknowledged"; "pid" => pid);
@@ -210,22 +215,22 @@ where
                     }
 
 
-                    let this_state = self.role();
-                    if this_state != &self.last_state {
+                    let this_state = self.role().clone();
+                    if this_state != self.last_state {
                         let prev_state = format!("{:?}", self.last_state);
                         let next_state = format!("{:?}", this_state);
                         debug!(&self.logger, "State transition"; "last-state" => prev_state.clone(), "next-state" => next_state.clone());
                         self.pubsub
-                            .unbounded_send(pubsub::Msg::new(
+                            .send(pubsub::Msg::new(
                                 "uring",
                                 PSURing::StateChange {
                                     prev_state,
                                     next_state,
                                     node: self.id,
                                 },
-                            ))
+                            )).await
                             .unwrap();
-                        self.last_state = this_state.clone();
+                        self.last_state = this_state;
                     }
                     self.raft_group.as_mut().unwrap().tick();
                     self.on_ready().await.unwrap();
@@ -247,7 +252,7 @@ where
         data: Vec<u8>,
     ) -> Result<()> {
         self.pubsub
-            .unbounded_send(pubsub::Msg::new(
+            .send(pubsub::Msg::new(
                 "uring",
                 PSURing::ProposalReceived {
                     from,
@@ -256,7 +261,7 @@ where
                     eid,
                     node: self.id,
                 },
-            ))
+            )).await
             .unwrap();
         if self.is_leader() {
             self.proposals
@@ -275,16 +280,16 @@ where
         }
     }
 
-    pub fn add_node(&mut self, id: NodeId) -> bool {
+    pub async fn add_node(&mut self, id: NodeId) -> bool {
         if self.is_leader() && !self.node_known(id) {
             self.pubsub
-                .unbounded_send(pubsub::Msg::new(
+                .send(pubsub::Msg::new(
                     "uring",
                     PSURing::AddNode {
                         new_node: id,
                         node: self.id,
                     },
-                ))
+                )).await
                 .unwrap();
             let mut conf_change = ConfChange::default();
             conf_change.node_id = id.0;
@@ -575,7 +580,7 @@ where
                         if let Some(service) = self.services.get_mut(&event.sid) {
                             let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
                             let value = service
-                                .execute(store, &self.pubsub, event.data)
+                                .execute(store, &mut self.pubsub, event.data)
                                 .await
                                 .unwrap();     
                             if event.nid == Some(self.id) {

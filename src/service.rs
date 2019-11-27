@@ -40,7 +40,7 @@ where
     async fn execute(
         &mut self,
         storage: &Storage,
-        pubsub: &pubsub::Channel,
+        pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error>;
     fn is_local(&self, event: &[u8]) -> Result<bool, Error>;

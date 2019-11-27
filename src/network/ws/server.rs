@@ -21,7 +21,7 @@ use async_std::net::ToSocketAddrs;
 use async_std::task;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::{select, FutureExt, StreamExt};
+use futures::{select, FutureExt, StreamExt, SinkExt};
 use std::io::Error;
 use tungstenite::protocol::Message;
 use ws_proto::*;
@@ -61,7 +61,7 @@ impl Connection {
         }
     }
 
-    fn handle_initial(&mut self, msg: Message) -> bool {
+    async fn handle_initial(&mut self, msg: Message) -> bool {
         if msg.is_text() {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
@@ -82,10 +82,10 @@ impl Connection {
                 Ok(ProtocolSelect::Subscribe { channel }) => self
                     .node
                     .pubsub
-                    .unbounded_send(pubsub::Msg::Subscribe {
+                    .send(pubsub::Msg::Subscribe {
                         channel,
                         tx: self.ps_tx.clone(),
-                    })
+                    }).await
                     .is_ok(),
                 Err(e) => {
                     error!(
@@ -102,7 +102,7 @@ impl Connection {
         }
     }
 
-    fn handle_uring(&mut self, msg: Message) -> bool {
+    async fn handle_uring(&mut self, msg: Message) -> bool {
         if msg.is_text() {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
@@ -144,7 +144,7 @@ impl Connection {
         }
     }
 
-    fn handle_kv(&mut self, msg: Message) -> bool {
+    async fn handle_kv(&mut self, msg: Message) -> bool {
         if msg.is_text() {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
@@ -217,7 +217,7 @@ impl Connection {
         }
     }
 
-    fn handle_mring(&mut self, msg: Message) -> bool {
+    async fn handle_mring(&mut self, msg: Message) -> bool {
         if msg.is_text() {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
@@ -293,10 +293,10 @@ impl Connection {
                 msg = self.rx.next() => {
                     if let Some(msg) = msg {
                         match self.protocol {
-                            None => self.handle_initial(msg),
-                            Some(Protocol::KV) => self.handle_kv(msg),
-                            Some(Protocol::URing) => self.handle_uring(msg),
-                            Some(Protocol::MRing) => self.handle_mring(msg),
+                            None => self.handle_initial(msg).await,
+                            Some(Protocol::KV) => self.handle_kv(msg).await,
+                            Some(Protocol::URing) => self.handle_uring(msg).await,
+                            Some(Protocol::MRing) => self.handle_mring(msg).await,
                         }
                     } else {
                         false

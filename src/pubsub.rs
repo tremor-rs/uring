@@ -13,14 +13,14 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 use async_std::task;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::{channel, UnboundedReceiver, UnboundedSender, Sender, Receiver};
 use futures::stream::StreamExt;
 use serde::Serialize;
 use slog::Logger;
 use std::collections::HashMap;
 use ws_proto::SubscriberMsg;
 
-pub type Channel = UnboundedSender<Msg>;
+pub type Channel = Sender<Msg>;
 
 pub enum Msg {
     Subscribe {
@@ -44,7 +44,7 @@ impl Msg {
     }
 }
 
-async fn pubsub_loop(logger: Logger, mut rx: UnboundedReceiver<Msg>) {
+async fn pubsub_loop(logger: Logger, mut rx: Receiver<Msg>) {
     let mut subscriptions: HashMap<String, Vec<UnboundedSender<SubscriberMsg>>> = HashMap::new();
     while let Some(msg) = rx.next().await {
         match msg {
@@ -79,7 +79,7 @@ async fn pubsub_loop(logger: Logger, mut rx: UnboundedReceiver<Msg>) {
 
 pub(crate) fn start(logger: &Logger) -> Channel {
     let logger = logger.clone();
-    let (tx, rx) = unbounded();
+    let (tx, rx) = channel(64);
 
     task::spawn(pubsub_loop(logger, rx));
     tx
