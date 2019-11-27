@@ -37,7 +37,7 @@ pub enum RaftNetworkMsg {
     Status(UnboundedSender<raft_node::RaftNodeStatus>),
     // Raft related
     AckProposal(ProposalId, bool),
-    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
+    ForwardProposal(NodeId, ProposalId, ServiceId, EventId, Vec<u8>),
     GetNode(NodeId, UnboundedSender<bool>),
     AddNode(NodeId, UnboundedSender<bool>),
 
@@ -63,6 +63,7 @@ pub trait Network {
         to: NodeId,
         pid: ProposalId,
         sid: ServiceId,
+        eid: EventId,
         data: Vec<u8>,
     ) -> Result<(), Error>;
 }

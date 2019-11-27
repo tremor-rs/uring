@@ -183,11 +183,11 @@ where
                                 }
                             }
                             if let Some(eid) = self.pending_acks.remove(&pid) {
-                                self.network.event_reply(eid, Some(vec![])).await.unwrap();
+                                //self.network.event_reply(eid, Some(vec![skilled])).await.unwrap();
                             }
                         }
-                        RaftNetworkMsg::ForwardProposal(from, pid, sid, data) => {
-                            if let Err(e) = self.propose_event(from, pid, sid, EventId(0), data).await {
+                        RaftNetworkMsg::ForwardProposal(from, pid, sid, eid, data) => {
+                            if let Err(e) = self.propose_event(from, pid, sid, eid, data).await {
                                 error!(self.logger, "Proposal forward error: {}", e);
                             }
                         }
@@ -260,11 +260,11 @@ where
             .unwrap();
         if self.is_leader() {
             self.proposals
-                .push_back(Proposal::normal(pid, from, sid, eid, data));
+                .push_back(Proposal::normal(pid, from, eid, sid, data));
             Ok(())
         } else {
             self.network
-                .forward_proposal(from, self.leader(), pid, sid, data)
+                .forward_proposal(from, self.leader(), pid, sid, eid, data)
                 .await
                 .map_err(|e| {
                     Error::Io(IoError::new(
@@ -572,14 +572,13 @@ where
                     // For normal proposals, extract the key-value pair and then
                     // insert them into the kv engine.
                     if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
-                        dbg!(&event);
                         if let Some(service) = self.services.get_mut(&event.sid) {
                             let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
                             let value = service
                                 .execute(store, &self.pubsub, event.data)
                                 .await
-                                .unwrap();
-                            if event.eid.0 != 0 {
+                                .unwrap();     
+                            if event.nid == Some(self.id) {
                                 self.network.event_reply(event.eid, value).await.unwrap();
                             }
                         }
@@ -591,9 +590,6 @@ where
                     if let Some(proposal) = self.proposals.pop_front() {
                         if proposal.proposer == self.id {
                             info!(self.logger, "Handling proposal(local)"; "proposal-id" => proposal.id);
-                            if let Some(eid) = self.pending_acks.remove(&proposal.id) {
-                                self.network.event_reply(eid, Some(vec![])).await.unwrap();
-                            }
                             self.pending_proposals.remove(&proposal.id);
                         } else {
                             info!(self.logger, "Handling proposal(remote)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
@@ -679,6 +675,10 @@ where
     }
 }
 
+pub struct RequestInfo {
+    from: NodeId,
+    eid: EventId,
+}
 pub struct Proposal {
     id: ProposalId,
     proposer: NodeId, // node id of the proposer
@@ -704,14 +704,14 @@ impl Proposal {
     pub fn normal(
         id: ProposalId,
         proposer: NodeId,
-        sid: ServiceId,
         eid: EventId,
+        sid: ServiceId,
         data: Vec<u8>,
     ) -> Self {
         Self {
             id,
             proposer,
-            normal: Some(Event { eid, sid, data }),
+            normal: Some(Event {  nid: Some(proposer), eid, sid, data }),
             conf_change: None,
             transfer_leader: None,
             proposed: 0,

@@ -179,9 +179,9 @@ where
                         })
                         .unwrap();
                     if let Some(conflict) = conflict {
-                        dbg!(Ok(Some(
+                        Ok(Some(
                             serde_json::to_vec(&serde_json::Value::String(conflict)).unwrap(),
-                        )))
+                        ))
                     } else {
                         Ok(Some(serde_json::to_vec(&serde_json::Value::Null).unwrap()))
                     }

@@ -49,8 +49,9 @@ pub struct KV {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Event {
-    sid: ServiceId,
+    nid: Option<NodeId>,
     eid: EventId,
+    sid: ServiceId,
     data: Vec<u8>,
 }
 

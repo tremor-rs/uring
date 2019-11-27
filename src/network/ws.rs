@@ -67,7 +67,7 @@ pub enum CtrlMsg {
     Hello(NodeId, String),
     HelloAck(NodeId, String, Vec<(NodeId, String)>),
     AckProposal(ProposalId, bool),
-    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
+    ForwardProposal(NodeId, ProposalId, ServiceId, EventId, Vec<u8>),
 }
 
 pub(crate) enum UrMsg {
@@ -86,7 +86,7 @@ pub(crate) enum UrMsg {
 
     // Raft related
     AckProposal(ProposalId, bool),
-    ForwardProposal(NodeId, ProposalId, ServiceId, Vec<u8>),
+    ForwardProposal(NodeId, ProposalId, ServiceId, EventId, Vec<u8>),
     RaftMsg(RaftMessage),
     GetNode(NodeId, UnboundedSender<bool>),
     AddNode(NodeId, UnboundedSender<bool>),
@@ -200,8 +200,8 @@ impl NetworkTrait for Network {
                 Some(RaftNetworkMsg::Event(eid, kv::ID, kv::Event::delete(key)))
             }
             UrMsg::AckProposal(pid, success) => Some(AckProposal(pid, success)),
-            UrMsg::ForwardProposal(from, pid, sid, data) => {
-                Some(ForwardProposal(from, pid, sid, data))
+            UrMsg::ForwardProposal(from, pid, sid, eid, data) => {
+                Some(ForwardProposal(from, pid, sid, eid, data))
             }
             UrMsg::RaftMsg(msg) => Some(RaftMsg(msg)),
             // Connection handling of websocket connections
@@ -324,9 +324,10 @@ impl NetworkTrait for Network {
         to: NodeId,
         pid: ProposalId,
         sid: ServiceId,
+        eid: EventId,
         data: Vec<u8>,
     ) -> Result<(), Error> {
-        let msg = WsMessage::Ctrl(CtrlMsg::ForwardProposal(from, pid, sid, data));
+        let msg = WsMessage::Ctrl(CtrlMsg::ForwardProposal(from, pid, sid, eid, data));
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
                 .unbounded_send(msg)

@@ -99,7 +99,6 @@ async fn kv_cas(mut cx: Context<Node>) -> EndpointResult {
         .unwrap();
     if let Some(result) = rx.next().await {
         if let Some(conflict) = result {
-            dbg!(String::from_utf8(conflict.clone()));
             let mut r = if conflict.is_empty() {
                 response::json(serde_json::Value::Null)
             } else {

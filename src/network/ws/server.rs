@@ -119,10 +119,10 @@ impl Connection {
                     .tx
                     .unbounded_send(UrMsg::AckProposal(pid, success))
                     .is_ok(),
-                Ok(CtrlMsg::ForwardProposal(from, pid, key, value)) => self
+                Ok(CtrlMsg::ForwardProposal(from, pid, sid, eid, value)) => self
                     .node
                     .tx
-                    .unbounded_send(UrMsg::ForwardProposal(from, pid, key, value))
+                    .unbounded_send(UrMsg::ForwardProposal(from, pid, sid, eid, value))
                     .is_ok(),
                 Ok(_) => true,
                 Err(e) => {
