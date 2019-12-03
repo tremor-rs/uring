@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::{pubsub, storage, ServiceId};
-use async_std::sync::{Arc, Mutex};
+use async_std::sync::Mutex;
 use async_trait::async_trait;
 use futures::SinkExt;
 use raft::RawNode;
@@ -109,7 +109,7 @@ where
 {
     async fn execute(
         &mut self,
-        node: &Arc<Mutex<RawNode<Storage>>>,
+        node: &Mutex<RawNode<Storage>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {

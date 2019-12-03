@@ -25,7 +25,7 @@ use std::marker::PhantomData;
 use uring_common::{MRingNodes, Relocations};
 use ws_proto::PSMRing;
 pub const ID: ServiceId = ServiceId(1);
-use async_std::sync::{Arc, Mutex};
+use async_std::sync::Mutex;
 use raft::RawNode;
 
 pub struct Service<Placement>
@@ -112,7 +112,7 @@ where
 {
     async fn execute(
         &mut self,
-        node: &Arc<Mutex<RawNode<Storage>>>,
+        node: &Mutex<RawNode<Storage>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
