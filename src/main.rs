@@ -77,14 +77,15 @@ async fn raft_loop<N: Network>(
         RaftNode::create_raft_follower(&logger, id, pubsub, network).await
     };
     node.set_raft_tick_duration(Duration::from_millis(100));
-    node.log();
+    node.log().await;
     let kv = kv::Service::new(&logger, 0);
     node.add_service(kv::ID, Box::new(kv));
     let mut vnode: mring::Service<continuous::Strategy> = mring::Service::new();
 
     if let Some(size) = ring_size {
         if bootstrap {
-            let (storage, pubsub) = node.sotrage_and_pubsub();
+            let raft_node = task::block_on(node.raft_group.as_ref().unwrap().lock());
+            let (pubsub, storage) = (&mut node.pubsub, raft_node.raft.store());
             vnode
                 .execute(
                     storage,
