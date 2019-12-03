@@ -15,7 +15,7 @@
 use super::*;
 use crate::service::Service;
 use crate::storage::*;
-use async_std::sync::{Arc, Mutex};
+use async_std::sync::Mutex;
 use async_std::task::block_on;
 use futures::SinkExt;
 use protobuf::Message as PBMessage;
@@ -64,7 +64,7 @@ where
     logger: Logger,
     // None if the raft is not initialized.
     id: NodeId,
-    pub raft_group: Option<Arc<Mutex<RawNode<Storage>>>>,
+    pub raft_group: Option<Mutex<RawNode<Storage>>>,
     network: Network,
     proposals: VecDeque<Proposal>,
     pending_proposals: HashMap<ProposalId, Proposal>,
@@ -411,9 +411,7 @@ where
         cfg.id = id.0;
 
         let storage = Storage::new_with_conf_state(id, ConfState::from((vec![id.0], vec![]))).await;
-        let raft_group = Some(Arc::new(Mutex::new(
-            RawNode::new(&cfg, storage, logger).unwrap(),
-        )));
+        let raft_group = Some(Mutex::new(RawNode::new(&cfg, storage, logger).unwrap()));
         Self {
             logger: logger.clone(),
             id,
@@ -450,9 +448,7 @@ where
             } else {
                 let mut cfg = example_config();
                 cfg.id = id.0;
-                Some(Arc::new(Mutex::new(
-                    RawNode::new(&cfg, storage, logger).unwrap(),
-                )))
+                Some(Mutex::new(RawNode::new(&cfg, storage, logger).unwrap()))
             },
             proposals: VecDeque::new(),
             network,
@@ -474,9 +470,9 @@ where
         let mut cfg = example_config();
         cfg.id = msg.to;
         let storage = Storage::new(self.id).await;
-        self.raft_group = Some(Arc::new(Mutex::new(
+        self.raft_group = Some(Mutex::new(
             RawNode::new(&cfg, storage, &self.logger).unwrap(),
-        )));
+        ));
     }
 
     // Step a raft message, initialize the raft if need.
