@@ -105,7 +105,7 @@ connections: {:?}
                 g.raft.randomized_election_timeout(),
                 &g.raft.leader_id,
                 &g.raft.term,
-                &g.raft.raft_log.store.last_index().unwrap_or(0),
+                &g.raft.store().last_index().unwrap_or(0),
                 &g.raft.vote,
                 &g.raft.votes,
                 &g.raft.prs().configuration().voters(),
@@ -125,15 +125,17 @@ where
     pub fn add_service(&mut self, sid: ServiceId, service: Box<dyn Service<Storage>>) {
         self.services.insert(sid, service);
     }
-    pub fn storage(&self) -> &Storage {
-        &self.raft_group.as_ref().unwrap().raft.raft_log.store
+    pub fn store(&self) -> &Storage {
+        self.raft_group.as_ref().unwrap().raft.store()
+    }
+    pub fn mut_store(&mut self) -> &mut Storage {
+        self.raft_group.as_mut().unwrap().raft.mut_store()
     }
     pub fn pubsub(&mut self) -> &mut pubsub::Channel {
         &mut self.pubsub
     }
     pub fn sotrage_and_pubsub(&mut self) -> (&Storage, &mut pubsub::Channel) {
-        (&self.raft_group.as_ref().unwrap().raft.raft_log.store, &mut self.pubsub)
-
+        (&self.raft_group.as_ref().unwrap().raft.store(), &mut self.pubsub)
     }
     pub async fn node_loop(&mut self) -> Result<()> {
         let mut ticks = async_std::stream::interval(self.tick_duration);
@@ -154,7 +156,7 @@ where
                         RaftNetworkMsg::Event(eid, sid, data) => {
                             if let Some(service) = self.services.get_mut(&sid) {
                                 if service.is_local(&data).unwrap() {
-                                    let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
+                                    let store = &self.raft_group.as_ref().unwrap().raft.store();
                                     let value = service.execute(store, &mut self.pubsub, data).await.unwrap();
                                     self.network.event_reply(eid, value).await.unwrap();
                                 } else {
@@ -318,7 +320,7 @@ where
                 election_elapsed: g.raft.election_elapsed,
                 randomized_election_timeout: g.raft.randomized_election_timeout(),
                 term: g.raft.term,
-                last_index: g.raft.raft_log.store.last_index().unwrap_or(0),
+                last_index: g.raft.store().last_index().unwrap_or(0),
             })
         } else {
             error!(self.logger, "UNINITIALIZED NODE {}", self.id);
@@ -345,8 +347,8 @@ where
 
                 "leader-id" => &g.raft.leader_id,
                 "term" => &g.raft.term,
-                "first-index" => &g.raft.raft_log.store.first_index().unwrap_or(0),
-                "last-index" => &g.raft.raft_log.store.last_index().unwrap_or(0),
+                "first-index" => &g.raft.store().first_index().unwrap_or(0),
+                "last-index" => &g.raft.store().last_index().unwrap_or(0),
 
                 "vote" => &g.raft.vote,
                 "votes" => format!("{:?}", &g.raft.votes),
@@ -476,46 +478,26 @@ where
         raft_group.step(msg)
     }
     async fn append(&self, entries: &[Entry]) -> Result<()> {
-        self.raft_group
-            .as_ref()
-            .unwrap()
-            .raft
-            .raft_log
-            .store
+        self.store()
             .append(entries)
             .await
     }
     async fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
-        self.raft_group
-            .as_mut()
-            .unwrap()
-            .raft
-            .raft_log
-            .store
+        self.mut_store()
             .apply_snapshot(snapshot)
             .await
     }
 
     // interface for raft-rs
     async fn set_conf_state(&mut self, cs: ConfState) -> Result<()> {
-        self.raft_group
-            .as_mut()
-            .unwrap()
-            .raft
-            .raft_log
-            .store
+        self.mut_store()
             .set_conf_state(cs)
             .await
     }
 
     // interface for raft-rs
     async fn set_hard_state(&mut self, commit: u64, term: u64) -> Result<()> {
-        self.raft_group
-            .as_mut()
-            .unwrap()
-            .raft
-            .raft_log
-            .store
+        self.mut_store()
             .set_hard_state(commit, term)
             .await
     }
@@ -578,7 +560,7 @@ where
                     // insert them into the kv engine.
                     if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
                         if let Some(service) = self.services.get_mut(&event.sid) {
-                            let store = &self.raft_group.as_ref().unwrap().raft.raft_log.store;
+                            let store = &self.raft_group.as_ref().unwrap().raft.store();
                             let value = service
                                 .execute(store, &mut self.pubsub, event.data)
                                 .await
