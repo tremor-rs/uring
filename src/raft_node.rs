@@ -159,7 +159,7 @@ where
                         RaftNetworkMsg::Event(eid, sid, data) => {
                             if let Some(service) = self.services.get_mut(&sid) {
                                 if service.is_local(&data).unwrap() {
-                                    let value = service.execute(self.raft_group.as_ref().unwrap().clone(), &mut self.pubsub, data).await.unwrap();
+                                    let value = service.execute(self.raft_group.as_ref().unwrap(), &mut self.pubsub, data).await.unwrap();
                                     self.network.event_reply(eid, value).await.unwrap();
                                 } else {
                                     let pid = self.next_pid();
@@ -574,7 +574,7 @@ where
                         if let Some(service) = self.services.get_mut(&event.sid) {
                             let value = service
                                 .execute(
-                                    self.raft_group.as_ref().unwrap().clone(),
+                                    self.raft_group.as_ref().unwrap(),
                                     &mut self.pubsub,
                                     event.data,
                                 )

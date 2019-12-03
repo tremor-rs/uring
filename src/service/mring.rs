@@ -112,7 +112,7 @@ where
 {
     async fn execute(
         &mut self,
-        node: Arc<Mutex<RawNode<Storage>>>,
+        node: &Arc<Mutex<RawNode<Storage>>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {

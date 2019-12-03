@@ -86,7 +86,7 @@ async fn raft_loop<N: Network>(
         if bootstrap {
             vnode
                 .execute(
-                    node.raft_group.as_ref().unwrap().clone(),
+                    node.raft_group.as_ref().unwrap(),
                     &mut node.pubsub,
                     service::mring::Event::set_size(size),
                 )
