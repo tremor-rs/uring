@@ -25,8 +25,8 @@ use crate::{NodeId, RequestId};
 use async_std::task;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender, Sender};
-use futures::{StreamExt, SinkExt};
+use futures::channel::mpsc::{unbounded, Sender, UnboundedReceiver, UnboundedSender};
+use futures::{SinkExt, StreamExt};
 use raft::eraftpb::Message as RaftMessage;
 use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
@@ -116,7 +116,8 @@ impl NetworkTrait for Network {
                         data: data.and_then(|d| serde_json::from_slice(&d).ok()),
                     }
                     .into(),
-                ).await
+                )
+                .await
                 .unwrap(),
             Some(Reply::Direct(sender)) => sender.unbounded_send(data).unwrap(),
             None => error!(self.logger, "Uknown event id {} for reply: {:?}", id, data),
@@ -252,7 +253,8 @@ impl NetworkTrait for Network {
                                 .clone()
                                 .into_iter()
                                 .collect::<Vec<(NodeId, String)>>(),
-                        ))).await
+                        )))
+                        .await
                         .unwrap();
                     self.remote_mailboxes.insert(id, endpoint.clone());
                 }
@@ -276,14 +278,20 @@ impl NetworkTrait for Network {
             }
         }
     }
-    async fn ack_proposal(&mut self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error> {
+    async fn ack_proposal(
+        &mut self,
+        to: NodeId,
+        pid: ProposalId,
+        success: bool,
+    ) -> Result<(), Error> {
         if let Some(remote) = self.local_mailboxes.get(&to) {
             remote
                 .unbounded_send(WsMessage::Ctrl(CtrlMsg::AckProposal(pid, success)))
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get_mut(&to) {
             remote
-                .send(WsMessage::Ctrl(CtrlMsg::AckProposal(pid, success))).await
+                .send(WsMessage::Ctrl(CtrlMsg::AckProposal(pid, success)))
+                .await
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else {
             Err(Error::Io(io::Error::new(
@@ -301,7 +309,8 @@ impl NetworkTrait for Network {
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get_mut(&to) {
             remote
-                .send(WsMessage::Raft(msg)).await
+                .send(WsMessage::Raft(msg))
+                .await
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else {
             // Err(Error::NotConnected(to)) this is not an error we'll retry
@@ -334,7 +343,8 @@ impl NetworkTrait for Network {
                 .map_err(|e| Error::Generic(format!("{}", e)))
         } else if let Some(remote) = self.remote_mailboxes.get_mut(&to) {
             remote
-                .send(msg).await
+                .send(msg)
+                .await
                 .map_err(|e| Error::Generic(format!("{}", e)))
         } else {
             Err(Error::NotConnected(to))

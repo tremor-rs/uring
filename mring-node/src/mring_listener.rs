@@ -15,18 +15,13 @@
 use super::*;
 use async_tungstenite::connect_async;
 use futures::channel::mpsc::Sender;
-use futures::{select, FutureExt, StreamExt, SinkExt};
+use futures::{select, FutureExt, SinkExt, StreamExt};
 use slog::Logger;
 use tungstenite::protocol::Message;
 use uring_common::{MRingNodes, Relocations, RequestId};
 use ws_proto::{MRRequest, PSMRing, Protocol, ProtocolSelect, Reply, SubscriberMsg};
 
-pub(crate) async fn run(
-    logger: Logger,
-    id: String,
-    connect_addr: String,
-    mut tasks: Sender<Task>,
-) {
+pub(crate) async fn run(logger: Logger, id: String, connect_addr: String, mut tasks: Sender<Task>) {
     let url = url::Url::parse(&connect_addr).unwrap();
 
     // After the TCP connection has been established, we set up our client to
@@ -152,7 +147,8 @@ async fn handle_change(
             tasks
                 .send(Task::Assign {
                     vnodes: vnode.vnodes,
-                }).await
+                })
+                .await
                 .unwrap();
         }
     } else {
@@ -161,7 +157,8 @@ async fn handle_change(
                 for vnode in ids {
                     let target = target.clone();
                     tasks
-                        .send(Task::HandoffOut { target, vnode }).await
+                        .send(Task::HandoffOut { target, vnode })
+                        .await
                         .unwrap();
                 }
             }

@@ -18,13 +18,15 @@ use crate::{pubsub, storage, ServiceId};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::BufMut;
+use futures::SinkExt;
 use serde_derive::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::marker::PhantomData;
 use uring_common::{MRingNodes, Relocations};
 use ws_proto::PSMRing;
-use futures::SinkExt;
 pub const ID: ServiceId = ServiceId(1);
+use async_std::sync::{Arc, Mutex};
+use raft::RawNode;
 
 pub struct Service<Placement>
 where
@@ -105,15 +107,17 @@ where
 #[async_trait]
 impl<Storage, Placement> super::Service<Storage> for Service<Placement>
 where
-    Storage: storage::Storage + Sync,
+    Storage: storage::Storage + Sync + Send + 'static,
     Placement: placement::Placement + Send + Sync,
 {
     async fn execute(
         &mut self,
-        storage: &Storage,
+        node: Arc<Mutex<RawNode<Storage>>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
+        let raft_node = node.lock().await;
+        let storage = raft_node.raft.store();
         match serde_json::from_slice(&event) {
             Ok(Event::GetSize) => Ok(self
                 .size(storage)
@@ -139,7 +143,8 @@ where
                             size,
                             strategy: Placement::name(),
                         },
-                    )).await
+                    ))
+                    .await
                     .unwrap();
 
                 Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
@@ -162,7 +167,8 @@ where
                                 next: next.clone(),
                                 relocations,
                             },
-                        )).await
+                        ))
+                        .await
                         .unwrap();
                     next
                 } else {
@@ -177,7 +183,8 @@ where
                                 next: next.clone(),
                                 relocations: Relocations::new(),
                             },
-                        )).await
+                        ))
+                        .await
                         .unwrap();
                     next
                 };
@@ -203,7 +210,8 @@ where
                                 next: next.clone(),
                                 relocations,
                             },
-                        )).await
+                        ))
+                        .await
                         .unwrap();
                     let next = serde_json::to_vec(&next).unwrap();
                     storage.put(mring::ID.0 as u16, NODES, &next);

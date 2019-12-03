@@ -15,7 +15,9 @@
 pub mod kv;
 pub mod mring;
 use crate::{pubsub, storage};
+use async_std::sync::{Arc, Mutex};
 use async_trait::async_trait;
+use raft::RawNode;
 use std::{fmt, io};
 
 #[derive(Debug)]
@@ -39,7 +41,7 @@ where
 {
     async fn execute(
         &mut self,
-        storage: &Storage,
+        node: Arc<Mutex<RawNode<Storage>>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error>;

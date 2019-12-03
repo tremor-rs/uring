@@ -16,11 +16,11 @@ use super::*;
 use async_std::net::ToSocketAddrs;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
-use futures::channel::mpsc::{Sender, channel};
+use futures::channel::mpsc::{channel, Sender};
+use futures::sink::SinkExt;
 use futures::StreamExt;
 use slog::Logger;
 use tungstenite::protocol::Message;
-use futures::sink::SinkExt;
 
 async fn handle_connection(logger: Logger, mut connection: Connection) {
     while let Some(msg) = connection.rx.next().await {
@@ -34,14 +34,16 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                 connection.vnode = Some(vnode);
                 connection
                     .tasks
-                    .send(Task::HandoffInStart { src, vnode }).await
+                    .send(Task::HandoffInStart { src, vnode })
+                    .await
                     .unwrap();
                 info!(logger, "handoff for node {} started", vnode);
                 connection
                     .tx
                     .send(Message::text(
                         serde_json::to_string(&HandoffAck::Start { vnode }).unwrap(),
-                    )).await
+                    ))
+                    .await
                     .expect("Failed to forward message");
             }
             Ok(HandoffMsg::Data { vnode, data, chunk }) => {
@@ -49,13 +51,15 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     assert_eq!(vnode, vnode_current);
                     connection
                         .tasks
-                        .send(Task::HandoffIn { data, vnode, chunk }).await
+                        .send(Task::HandoffIn { data, vnode, chunk })
+                        .await
                         .unwrap();
                     connection
                         .tx
                         .send(Message::text(
                             serde_json::to_string(&HandoffAck::Data { chunk: chunk }).unwrap(),
-                        )).await
+                        ))
+                        .await
                         .expect("Failed to forward message");
                 }
             }
@@ -64,13 +68,15 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     assert_eq!(node_id, vnode);
                     connection
                         .tasks
-                        .send(Task::HandoffInEnd { vnode }).await
+                        .send(Task::HandoffInEnd { vnode })
+                        .await
                         .unwrap();
                     connection
                         .tx
                         .send(Message::text(
                             serde_json::to_string(&HandoffAck::Finish { vnode }).unwrap(),
-                        )).await
+                        ))
+                        .await
                         .expect("Failed to forward message");
                 }
                 connection.vnode = None;
@@ -109,7 +115,8 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: Sender<Task
 
     while let Some(Ok(message)) = ws_stream.next().await {
         msg_tx
-            .send(message).await
+            .send(message)
+            .await
             .expect("Failed to forward request");
         if let Some(resp) = response_rx.next().await {
             if ws_stream.send(resp).await.is_err() {

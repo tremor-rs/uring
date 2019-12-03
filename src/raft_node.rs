@@ -15,6 +15,9 @@
 use super::*;
 use crate::service::Service;
 use crate::storage::*;
+use async_std::sync::{Arc, Mutex};
+use async_std::task::block_on;
+use futures::SinkExt;
 use protobuf::Message as PBMessage;
 use raft::eraftpb::ConfState;
 use raft::eraftpb::Message;
@@ -24,9 +27,6 @@ use slog::Logger;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
-use futures::SinkExt;
-use async_std::sync::{Arc, Mutex};
-use async_std::task::block_on;
 
 fn example_config() -> Config {
     Config {
@@ -159,9 +159,7 @@ where
                         RaftNetworkMsg::Event(eid, sid, data) => {
                             if let Some(service) = self.services.get_mut(&sid) {
                                 if service.is_local(&data).unwrap() {
-                                    let raft_node = self.raft_group.as_ref().unwrap().lock().await;
-                                    let store = raft_node.raft.store();
-                                    let value = service.execute(store, &mut self.pubsub, data).await.unwrap();
+                                    let value = service.execute(self.raft_group.as_ref().unwrap().clone(), &mut self.pubsub, data).await.unwrap();
                                     self.network.event_reply(eid, value).await.unwrap();
                                 } else {
                                     let pid = self.next_pid();
@@ -220,7 +218,6 @@ where
                         i = Instant::now();
                     }
 
-
                     let this_state = self.role().clone();
                     if this_state != self.last_state {
                         let prev_state = format!("{:?}", self.last_state);
@@ -267,7 +264,8 @@ where
                     eid,
                     node: self.id,
                 },
-            )).await
+            ))
+            .await
             .unwrap();
         if self.is_leader() {
             self.proposals
@@ -295,7 +293,8 @@ where
                         new_node: id,
                         node: self.id,
                     },
-                )).await
+                ))
+                .await
                 .unwrap();
             let mut conf_change = ConfChange::default();
             conf_change.node_id = id.0;
@@ -412,7 +411,9 @@ where
         cfg.id = id.0;
 
         let storage = Storage::new_with_conf_state(id, ConfState::from((vec![id.0], vec![]))).await;
-        let raft_group = Some(Arc::new(Mutex::new(RawNode::new(&cfg, storage, logger).unwrap())));
+        let raft_group = Some(Arc::new(Mutex::new(
+            RawNode::new(&cfg, storage, logger).unwrap(),
+        )));
         Self {
             logger: logger.clone(),
             id,
@@ -449,7 +450,9 @@ where
             } else {
                 let mut cfg = example_config();
                 cfg.id = id.0;
-                Some(Arc::new(Mutex::new(RawNode::new(&cfg, storage, logger).unwrap())))
+                Some(Arc::new(Mutex::new(
+                    RawNode::new(&cfg, storage, logger).unwrap(),
+                )))
             },
             proposals: VecDeque::new(),
             network,
@@ -471,7 +474,9 @@ where
         let mut cfg = example_config();
         cfg.id = msg.to;
         let storage = Storage::new(self.id).await;
-        self.raft_group = Some(Arc::new(Mutex::new(RawNode::new(&cfg, storage, &self.logger).unwrap())));
+        self.raft_group = Some(Arc::new(Mutex::new(
+            RawNode::new(&cfg, storage, &self.logger).unwrap(),
+        )));
     }
 
     // Step a raft message, initialize the raft if need.
@@ -488,31 +493,23 @@ where
     }
     async fn append(&self, entries: &[Entry]) -> Result<()> {
         let raft_node = self.raft_group.as_ref().unwrap().lock().await;
-        raft_node.store()
-            .append(entries)
-            .await
+        raft_node.store().append(entries).await
     }
     async fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         let mut raft_node = self.raft_group.as_ref().unwrap().lock().await;
-        raft_node.mut_store()
-            .apply_snapshot(snapshot)
-            .await
+        raft_node.mut_store().apply_snapshot(snapshot).await
     }
 
     // interface for raft-rs
     async fn set_conf_state(&mut self, cs: ConfState) -> Result<()> {
         let mut raft_node = self.raft_group.as_ref().unwrap().lock().await;
-        raft_node.mut_store()
-            .set_conf_state(cs)
-            .await
+        raft_node.mut_store().set_conf_state(cs).await
     }
 
     // interface for raft-rs
     async fn set_hard_state(&mut self, commit: u64, term: u64) -> Result<()> {
         let mut raft_node = self.raft_group.as_ref().unwrap().lock().await;
-        raft_node.mut_store()
-            .set_hard_state(commit, term)
-            .await
+        raft_node.mut_store().set_hard_state(commit, term).await
     }
 
     pub(crate) async fn on_ready(&mut self) -> Result<()> {
@@ -564,7 +561,9 @@ where
                     let cs: ConfState = self
                         .raft_group
                         .as_mut()
-                        .unwrap().lock().await
+                        .unwrap()
+                        .lock()
+                        .await
                         .apply_conf_change(&cc)
                         .unwrap();
                     self.set_conf_state(cs).await?;
@@ -573,12 +572,14 @@ where
                     // insert them into the kv engine.
                     if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
                         if let Some(service) = self.services.get_mut(&event.sid) {
-                            let raft_node = self.raft_group.as_ref().unwrap().lock().await;
-                            let store = raft_node.raft.store();
                             let value = service
-                                .execute(store, &mut self.pubsub, event.data)
+                                .execute(
+                                    self.raft_group.as_ref().unwrap().clone(),
+                                    &mut self.pubsub,
+                                    event.data,
+                                )
                                 .await
-                                .unwrap();     
+                                .unwrap();
                             if event.nid == Some(self.id) {
                                 self.network.event_reply(event.eid, value).await.unwrap();
                             }
@@ -613,7 +614,12 @@ where
             }
         }
         // Call `RawNode::advance` interface to update position flags in the raft.
-        self.raft_group.as_mut().unwrap().lock().await.advance(ready);
+        self.raft_group
+            .as_mut()
+            .unwrap()
+            .lock()
+            .await
+            .advance(ready);
         Ok(())
     }
 
@@ -708,7 +714,12 @@ impl Proposal {
         Self {
             id,
             proposer,
-            normal: Some(Event {  nid: Some(proposer), eid, sid, data }),
+            normal: Some(Event {
+                nid: Some(proposer),
+                eid,
+                sid,
+                data,
+            }),
             conf_change: None,
             transfer_leader: None,
             proposed: 0,

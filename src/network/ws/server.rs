@@ -21,7 +21,7 @@ use async_std::net::ToSocketAddrs;
 use async_std::task;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::{select, FutureExt, StreamExt, SinkExt};
+use futures::{select, FutureExt, SinkExt, StreamExt};
 use std::io::Error;
 use tungstenite::protocol::Message;
 use ws_proto::*;
@@ -41,11 +41,7 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    pub(crate) fn new(
-        node: Node,
-        rx: Receiver<Message>,
-        tx: Sender<Message>,
-    ) -> Self {
+    pub(crate) fn new(node: Node, rx: Receiver<Message>, tx: Sender<Message>) -> Self {
         let (ps_tx, ps_rx) = channel(64);
         let (ws_tx, ws_rx) = channel(64);
         Self {
@@ -71,7 +67,8 @@ impl Connection {
                         .send(Message::Text(
                             serde_json::to_string(&ProtocolSelect::Selected { rid, protocol })
                                 .unwrap(),
-                        )).await
+                        ))
+                        .await
                         .is_ok()
                 }
                 Ok(ProtocolSelect::Selected { .. }) => false,
@@ -85,7 +82,8 @@ impl Connection {
                     .send(pubsub::Msg::Subscribe {
                         channel,
                         tx: self.ps_tx.clone(),
-                    }).await
+                    })
+                    .await
                     .is_ok(),
                 Err(e) => {
                     error!(
@@ -166,50 +164,46 @@ impl Connection {
 
     fn handle_kv_msg(&mut self, msg: KVRequest) -> bool {
         match msg {
-            KVRequest::Get { rid, key } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::Get(
-                        key.into_bytes(),
-                        WsReply::WS(rid, self.ws_tx.clone()),
-                    ))
-                    .is_ok()
-            }
-            KVRequest::Put { rid, key, store } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::Put(
-                        key.into_bytes(),
-                        store.into_bytes(),
-                        WsReply::WS(rid, self.ws_tx.clone()),
-                    ))
-                    .is_ok()
-            }
-            KVRequest::Delete { rid, key } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::Delete(
-                        key.into_bytes(),
-                        WsReply::WS(rid, self.ws_tx.clone()),
-                    ))
-                    .is_ok()
-            }
+            KVRequest::Get { rid, key } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::Get(
+                    key.into_bytes(),
+                    WsReply::WS(rid, self.ws_tx.clone()),
+                ))
+                .is_ok(),
+            KVRequest::Put { rid, key, store } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::Put(
+                    key.into_bytes(),
+                    store.into_bytes(),
+                    WsReply::WS(rid, self.ws_tx.clone()),
+                ))
+                .is_ok(),
+            KVRequest::Delete { rid, key } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::Delete(
+                    key.into_bytes(),
+                    WsReply::WS(rid, self.ws_tx.clone()),
+                ))
+                .is_ok(),
             KVRequest::Cas {
                 rid,
                 key,
                 check,
                 store,
-            } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::Cas(
-                        key.into_bytes(),
-                        check.map(String::into_bytes),
-                        store.into_bytes(),
-                        WsReply::WS(rid, self.ws_tx.clone()),
-                    ))
-                    .is_ok()
-            }
+            } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::Cas(
+                    key.into_bytes(),
+                    check.map(String::into_bytes),
+                    store.into_bytes(),
+                    WsReply::WS(rid, self.ws_tx.clone()),
+                ))
+                .is_ok(),
         }
     }
 
@@ -235,46 +229,41 @@ impl Connection {
 
     fn handle_mring_msg(&mut self, msg: MRRequest) -> bool {
         match msg {
-            MRRequest::GetSize { rid } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::MRingGetSize(WsReply::WS(rid, self.ws_tx.clone())))
-                    .is_ok()
-            }
+            MRRequest::GetSize { rid } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::MRingGetSize(WsReply::WS(rid, self.ws_tx.clone())))
+                .is_ok(),
 
-            MRRequest::SetSize { rid, size } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::MRingSetSize(
-                        size,
-                        WsReply::WS(rid, self.ws_tx.clone()),
-                    ))
-                    .is_ok()
-            }
-            MRRequest::GetNodes { rid } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::MRingGetNodes(WsReply::WS(rid, self.ws_tx.clone())))
-                    .is_ok()
-            }
-            MRRequest::AddNode { rid, node } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::MRingAddNode(
-                        node,
-                        WsReply::WS(rid, self.ws_tx.clone()),
-                    ))
-                    .is_ok()
-            }
-            MRRequest::RemoveNode { rid, node } => {
-                self.node
-                    .tx
-                    .unbounded_send(UrMsg::MRingRemoveNode(
-                        node,
-                        WsReply::WS(rid, self.ws_tx.clone()),
-                    ))
-                    .is_ok()
-            }
+            MRRequest::SetSize { rid, size } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::MRingSetSize(
+                    size,
+                    WsReply::WS(rid, self.ws_tx.clone()),
+                ))
+                .is_ok(),
+            MRRequest::GetNodes { rid } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::MRingGetNodes(WsReply::WS(rid, self.ws_tx.clone())))
+                .is_ok(),
+            MRRequest::AddNode { rid, node } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::MRingAddNode(
+                    node,
+                    WsReply::WS(rid, self.ws_tx.clone()),
+                ))
+                .is_ok(),
+            MRRequest::RemoveNode { rid, node } => self
+                .node
+                .tx
+                .unbounded_send(UrMsg::MRingRemoveNode(
+                    node,
+                    WsReply::WS(rid, self.ws_tx.clone()),
+                ))
+                .is_ok(),
         }
     }
 

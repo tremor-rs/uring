@@ -53,7 +53,12 @@ pub enum TryNextError {
 #[async_trait]
 pub trait Network {
     async fn next(&mut self) -> Option<RaftNetworkMsg>;
-    async fn ack_proposal(&mut self, to: NodeId, pid: ProposalId, success: bool) -> Result<(), Error>;
+    async fn ack_proposal(
+        &mut self,
+        to: NodeId,
+        pid: ProposalId,
+        success: bool,
+    ) -> Result<(), Error>;
     async fn event_reply(&mut self, id: EventId, reply: Option<Vec<u8>>) -> Result<(), Error>;
     async fn send_msg(&mut self, msg: RaftMessage) -> Result<(), Error>;
     fn connections(&self) -> Vec<NodeId>;

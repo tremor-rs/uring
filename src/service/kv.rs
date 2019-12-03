@@ -14,10 +14,12 @@
 
 use super::*;
 use crate::{pubsub, storage, ServiceId};
+use async_std::sync::{Arc, Mutex};
 use async_trait::async_trait;
+use futures::SinkExt;
+use raft::RawNode;
 use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
-use futures::SinkExt;
 
 pub const ID: ServiceId = ServiceId(0);
 
@@ -103,14 +105,16 @@ impl Event {
 #[async_trait]
 impl<Storage> super::Service<Storage> for Service
 where
-    Storage: storage::Storage + Sync,
+    Storage: storage::Storage + Sync + Send + 'static,
 {
     async fn execute(
         &mut self,
-        storage: &Storage,
+        node: Arc<Mutex<RawNode<Storage>>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
+        let raft_node = node.lock().await;
+        let storage = raft_node.raft.store();
         match serde_json::from_slice(&event) {
             Ok(Event::Get { key }) => {
                 debug!(
@@ -147,7 +151,8 @@ where
                     .send(pubsub::Msg::Msg {
                         channel: "kv".into(),
                         msg: msg,
-                    }).await
+                    })
+                    .await
                     .unwrap();
                 Ok(old.and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
             }
@@ -177,7 +182,8 @@ where
                         .send(pubsub::Msg::Msg {
                             channel: "kv".into(),
                             msg: msg,
-                        }).await
+                        })
+                        .await
                         .unwrap();
                     if let Some(conflict) = conflict {
                         Ok(Some(
@@ -200,7 +206,8 @@ where
                         .send(pubsub::Msg::Msg {
                             channel: "kv".into(),
                             msg: msg,
-                        }).await
+                        })
+                        .await
                         .unwrap();
                     Ok(None)
                 }

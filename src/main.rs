@@ -84,12 +84,10 @@ async fn raft_loop<N: Network>(
 
     if let Some(size) = ring_size {
         if bootstrap {
-            let raft_node = task::block_on(node.raft_group.as_ref().unwrap().lock());
-            let (pubsub, storage) = (&mut node.pubsub, raft_node.raft.store());
             vnode
                 .execute(
-                    storage,
-                    pubsub,
+                    node.raft_group.as_ref().unwrap().clone(),
+                    &mut node.pubsub,
                     service::mring::Event::set_size(size),
                 )
                 .await

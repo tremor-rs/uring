@@ -13,8 +13,8 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 use async_std::task;
-use futures::channel::mpsc::{channel, Sender, Receiver};
-use futures::{StreamExt, SinkExt};
+use futures::channel::mpsc::{channel, Receiver, Sender};
+use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use slog::Logger;
 use std::collections::HashMap;
@@ -60,8 +60,7 @@ async fn pubsub_loop(logger: Logger, mut rx: Receiver<Msg>) {
                 for mut tx in subscriptions.drain(..) {
                     let channel = channel.clone();
                     let msg = msg.clone();
-                    if tx.send(SubscriberMsg::Msg { channel, msg }).await.is_ok()
-                    {
+                    if tx.send(SubscriberMsg::Msg { channel, msg }).await.is_ok() {
                         s1.push(tx)
                     }
                 }

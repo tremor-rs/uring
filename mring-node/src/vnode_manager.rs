@@ -14,13 +14,13 @@
 
 use super::*;
 use async_std::net::TcpStream;
-use futures::channel::mpsc::{Receiver, Sender, channel};
+use futures::channel::mpsc::{channel, Receiver, Sender};
+use futures::sink::SinkExt;
 use futures::{select, FutureExt, StreamExt};
 use slog::Logger;
 use std::collections::HashMap;
 use std::time::Duration;
 use tungstenite::protocol::Message;
-use futures::sink::SinkExt;
 
 type WSStream = async_tungstenite::WebSocketStream<
     async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
@@ -65,7 +65,8 @@ impl HandoffWorker {
                 logger,
                 "Failed to connect to {} to transfair vnode {}", target, vnode
             );
-            cnc.send(Cmd::CancleHandoff { vnode, target }).await
+            cnc.send(Cmd::CancleHandoff { vnode, target })
+                .await
                 .unwrap();
             Err(HandoffError::ConnectionFailed)
         }
@@ -82,9 +83,7 @@ impl HandoffWorker {
         let vnode = self.vnode;
         self.try_ack(HandoffMsg::Finish { vnode }, HandoffAck::Finish { vnode })
             .await?;
-        self.cnc
-            .send(Cmd::FinishHandoff { vnode }).await
-            .unwrap();
+        self.cnc.send(Cmd::FinishHandoff { vnode }).await.unwrap();
         Ok(())
     }
 
@@ -115,7 +114,8 @@ impl HandoffWorker {
                 vnode,
                 chunk,
                 reply: tx.clone(),
-            }).await
+            })
+            .await
             .is_err()
         {
             return self.cancle().await;
@@ -192,7 +192,8 @@ impl HandoffWorker {
             .send(Cmd::CancleHandoff {
                 vnode: self.vnode,
                 target: self.target.clone(),
-            }).await
+            })
+            .await
             .unwrap();
         Err(HandoffError::Cancled)
     }
@@ -251,7 +252,8 @@ async fn handle_cmd(
                     "Canceling handoff of vnode {} to {} - requeing to restart", vnode, target
                 );
                 tasks_tx
-                    .send(Task::HandoffOut { target, vnode }).await
+                    .send(Task::HandoffOut { target, vnode })
+                    .await
                     .unwrap();
             } else {
                 info!(logger, "Unknown vnode");
