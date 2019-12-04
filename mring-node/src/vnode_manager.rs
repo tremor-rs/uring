@@ -37,7 +37,7 @@ struct HandoffWorker {
 
 enum HandoffError {
     ConnectionFailed,
-    Cancled,
+    Canceld,
 }
 
 impl HandoffWorker {
@@ -64,7 +64,7 @@ impl HandoffWorker {
                 logger,
                 "Failed to connect to {} to transfair vnode {}", target, vnode
             );
-            cnc.send(Cmd::CancleHandoff { vnode, target })
+            cnc.send(Cmd::CancelHandoff { vnode, target })
                 .await
                 .unwrap();
             Err(HandoffError::ConnectionFailed)
@@ -117,7 +117,7 @@ impl HandoffWorker {
             .await
             .is_err()
         {
-            return self.cancle().await;
+            return self.cancel().await;
         };
 
         if let Some((r_chunk, data)) = rx.next().await {
@@ -143,7 +143,7 @@ impl HandoffWorker {
                 self.logger,
                 "error tranfairing chunk {} for vnode {}", chunk, vnode
             );
-            self.cancle().await
+            self.cancel().await
         }
     }
 
@@ -161,14 +161,14 @@ impl HandoffWorker {
                 self.vnode,
                 self.target
             );
-            return self.cancle().await;
+            return self.cancel().await;
         };
 
         if let Some(Ok(data)) = self.ws_stream.next().await {
             let r: HandoffAck = serde_json::from_slice(&data.into_data()).unwrap();
             if ack != r {
                 error!(self.logger, "Bad reply for  handoff command {:?} for vnode {} to {}. Expected, {:?}, but gut {:?}", msg, self.vnode, self.target, ack, r);
-                return self.cancle().await;
+                return self.cancel().await;
             }
         } else {
             error!(
@@ -178,23 +178,23 @@ impl HandoffWorker {
                 self.vnode,
                 self.target
             );
-            return self.cancle().await;
+            return self.cancel().await;
         }
         Ok(())
     }
 
-    async fn cancle<T>(&mut self) -> Result<T, HandoffError>
+    async fn cancel<T>(&mut self) -> Result<T, HandoffError>
     where
         T: Default,
     {
         self.cnc
-            .send(Cmd::CancleHandoff {
+            .send(Cmd::CancelHandoff {
                 vnode: self.vnode,
                 target: self.target.clone(),
             })
             .await
             .unwrap();
-        Err(HandoffError::Cancled)
+        Err(HandoffError::Canceld)
     }
 }
 
@@ -207,7 +207,7 @@ enum Cmd {
     FinishHandoff {
         vnode: u64,
     },
-    CancleHandoff {
+    CancelHandoff {
         vnode: u64,
         target: String,
     },
@@ -242,13 +242,13 @@ async fn handle_cmd(
                 info!(logger, "Unknown vnode");
             }
         }
-        Some(Cmd::CancleHandoff { vnode, target }) => {
+        Some(Cmd::CancelHandoff { vnode, target }) => {
             if let Some(node) = vnodes.get_mut(&vnode) {
                 assert!(node.handoff.is_some());
                 node.handoff = None;
                 warn!(
                     logger,
-                    "Canceling handoff of vnode {} to {} - requeing to restart", vnode, target
+                    "Canceling handoff of vnode {} to {} - requeueing to restart", vnode, target
                 );
                 tasks_tx
                     .send(Task::HandoffOut { target, vnode })
