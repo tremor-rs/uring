@@ -15,6 +15,7 @@
 
 use super::Reply as WsReply;
 use super::*;
+use crate::version::VERSION;
 use crate::{pubsub, NodeId};
 use async_std::net::TcpListener;
 use async_std::net::ToSocketAddrs;
@@ -61,6 +62,17 @@ impl Connection {
         if msg.is_text() {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
+                Ok(ProtocolSelect::Status { rid }) => self
+                    .node
+                    .tx
+                    .send(UrMsg::Status(rid, self.ws_tx.clone()))
+                    .await
+                    .is_ok(),
+                Ok(ProtocolSelect::Version { .. }) => self
+                    .tx
+                    .send(Message::Text(serde_json::to_string(VERSION).unwrap()))
+                    .await
+                    .is_ok(),
                 Ok(ProtocolSelect::Select { rid, protocol }) => {
                     self.protocol = Some(protocol);
                     self.tx
@@ -211,7 +223,7 @@ impl Connection {
         if msg.is_text() {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
-                Ok(msg) => self.handle_mring_msg(msg),
+                Ok(msg) => self.handle_mring_msg(msg).await,
                 Err(e) => {
                     error!(
                         self.node.logger,
@@ -227,7 +239,7 @@ impl Connection {
         }
     }
 
-    fn handle_mring_msg(&mut self, msg: MRRequest) -> bool {
+    async fn handle_mring_msg(&mut self, msg: MRRequest) -> bool {
         match msg {
             MRRequest::GetSize { rid } => self
                 .node
@@ -267,6 +279,70 @@ impl Connection {
         }
     }
 
+    async fn handle_version(&mut self, msg: Message) -> bool {
+        if msg.is_text() {
+            let text = msg.into_data();
+            match serde_json::from_slice(&text) {
+                Ok(msg) => self.handle_version_msg(msg),
+                Err(e) => {
+                    error!(
+                        self.node.logger,
+                        "Failed to decode VRequest message: {} => {}",
+                        e,
+                        String::from_utf8(text).unwrap_or_default()
+                    );
+                    true
+                }
+            }
+        } else {
+            true
+        }
+    }
+
+    fn handle_version_msg(&mut self, msg: VRequest) -> bool {
+        match msg {
+            VRequest::Get { rid } => {
+                self.node
+                    .tx
+                    .unbounded_send(UrMsg::Version(rid, self.ws_tx.clone()))
+                    .unwrap();
+                true
+            }
+        }
+    }
+
+    async fn handle_status(&mut self, msg: Message) -> bool {
+        if msg.is_text() {
+            let text = msg.into_data();
+            match serde_json::from_slice(&text) {
+                Ok(msg) => self.handle_status_msg(msg),
+                Err(e) => {
+                    error!(
+                        self.node.logger,
+                        "Failed to decode SRequest message: {} => {}",
+                        e,
+                        String::from_utf8(text).unwrap_or_default()
+                    );
+                    true
+                }
+            }
+        } else {
+            true
+        }
+    }
+
+    fn handle_status_msg(&mut self, msg: SRequest) -> bool {
+        match msg {
+            SRequest::Get { rid } => {
+                self.node
+                    .tx
+                    .unbounded_send(UrMsg::Status(rid, self.ws_tx.clone()))
+                    .unwrap();
+                true
+            }
+        }
+    }
+
     pub async fn msg_loop(mut self, logger: Logger) {
         loop {
             let cont = select! {
@@ -277,6 +353,8 @@ impl Connection {
                             Some(Protocol::KV) => self.handle_kv(msg).await,
                             Some(Protocol::URing) => self.handle_uring(msg).await,
                             Some(Protocol::MRing) => self.handle_mring(msg).await,
+                            Some(Protocol::Version) => self.handle_version(msg).await,
+                            Some(Protocol::Status) => self.handle_status(msg).await,
                         }
                     } else {
                         false
@@ -285,7 +363,7 @@ impl Connection {
                 }
                 msg = self.ws_rx.next() => {
                     match self.protocol {
-                        None | Some(Protocol::KV) | Some(Protocol::MRing) => match msg {
+                        None | Some(Protocol::Status) | Some(Protocol::Version) | Some(Protocol::KV) | Some(Protocol::MRing) => match msg {
                             Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
                             Some(WsMessage::Reply(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
                             None | Some(WsMessage::Raft(_)) => false,

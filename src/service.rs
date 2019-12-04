@@ -14,7 +14,10 @@
 
 pub mod kv;
 pub mod mring;
+pub mod status;
+pub mod version;
 use crate::{pubsub, storage};
+
 use async_std::sync::Mutex;
 use async_trait::async_trait;
 use raft::RawNode;
@@ -35,9 +38,9 @@ impl fmt::Display for Error {
 }
 
 #[async_trait]
-pub trait Service<Storage>
+pub trait Service<Storage>: Send + Sync
 where
-    Storage: storage::Storage,
+    Storage: storage::Storage + Send + Sync,
 {
     async fn execute(
         &mut self,

@@ -57,6 +57,83 @@ pub struct URRocksStorage {
     conf_state: Option<ConfState>,
 }
 
+pub struct NullStorage {}
+
+#[async_trait]
+impl Storage for NullStorage {
+    async fn new_with_conf_state(_id: NodeId, _state: ConfState) -> Self {
+        NullStorage {}
+    }
+
+    async fn new(_id: NodeId) -> Self {
+        NullStorage {}
+    }
+}
+
+#[async_trait]
+impl WriteStorage for NullStorage {
+    async fn append(&self, _entries: &[Entry]) -> RaftResult<()> {
+        unimplemented!()
+    }
+    async fn apply_snapshot(&mut self, _snapshot: Snapshot) -> RaftResult<()> {
+        unimplemented!()
+    }
+    async fn set_conf_state(&mut self, _cs: ConfState) -> RaftResult<()> {
+        unimplemented!()
+    }
+    async fn set_hard_state(&mut self, _commit: u64, _term: u64) -> RaftResult<()> {
+        unimplemented!()
+    }
+    async fn get(&self, _scope: u16, _key: &[u8]) -> Option<Vec<u8>> {
+        unimplemented!()
+    }
+    async fn put(&self, _keyscope: u16, _key: &[u8], _value: &[u8]) {
+        unimplemented!()
+    }
+    async fn cas(
+        &self,
+        _keyscope: u16,
+        _key: &[u8],
+        _check_value: Option<&[u8]>,
+        _store_value: &[u8],
+    ) -> Option<Option<Vec<u8>>> {
+        unimplemented!()
+    }
+    async fn delete(&self, _scope: u16, _key: &[u8]) -> Option<Vec<u8>> {
+        unimplemented!()
+    }
+}
+
+pub type NullStorageError = raft::Error;
+
+impl ReadStorage for NullStorage {
+    fn initial_state(&self) -> Result<RaftState, NullStorageError> {
+        Ok(RaftState::default())
+    }
+    fn entries(
+        &self,
+        _low: u64,
+        _high: u64,
+        _max_size: impl Into<Option<u64>>,
+    ) -> Result<Vec<Entry>, NullStorageError> {
+        unimplemented!()
+    }
+    fn term(&self, _idx: u64) -> Result<u64, NullStorageError> {
+        Ok(1)
+    }
+    fn first_index(&self) -> Result<u64, NullStorageError> {
+        Ok(1)
+    }
+    fn last_index(&self) -> Result<u64, NullStorageError> {
+        Ok(1)
+    }
+    fn snapshot(&self, _request_index: u64) -> Result<Snapshot, NullStorageError> {
+        unimplemented!()
+    }
+}
+
+unsafe impl Send for URRocksStorage {}
+
 #[async_trait]
 impl Storage for URRocksStorage {
     async fn new_with_conf_state(id: NodeId, state: ConfState) -> Self {

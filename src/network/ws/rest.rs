@@ -16,17 +16,41 @@
 use super::Node;
 use super::*;
 use crate::{NodeId, KV};
-use futures::channel::mpsc::unbounded;
+use futures::channel::mpsc::{unbounded, channel};
 use http::StatusCode;
 use tide::{error::ResultExt, response, App, Context, EndpointResult};
 
-async fn status(cx: Context<Node>) -> EndpointResult {
-    let (tx, mut rx) = unbounded();
-    cx.state().tx.unbounded_send(UrMsg::Status(tx)).unwrap();
+const CHANNEL_SIZE: usize = 64usize;
+
+async fn version(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = channel(CHANNEL_SIZE);
+    cx.state()
+        .tx
+        .unbounded_send(UrMsg::Version(RequestId(666), tx))
+        .unwrap();
     rx.next()
         .await
         .ok_or(StatusCode::NOT_FOUND.into())
-        .map(response::json)
+        // FIXME TODO refactor REST ( direct ) vs WS (WS ) support => make protocol agnostic by design
+        .map(|msg| match msg {
+            WsMessage::Reply(r) => response::json(r.data),
+            _ => unreachable!(),
+        })
+}
+
+async fn status(cx: Context<Node>) -> EndpointResult {
+    let (tx, mut rx) = channel(CHANNEL_SIZE);
+    cx.state()
+        .tx
+        .unbounded_send(UrMsg::Status(RequestId(666), tx))
+        .unwrap();
+    rx.next()
+        .await
+        .ok_or(StatusCode::NOT_FOUND.into())
+        .map(|msg| match msg {
+            WsMessage::Reply(r) => response::json(r.data),
+            _ => unreachable!(),
+        })
 }
 
 async fn kv_get(cx: Context<Node>) -> EndpointResult {
@@ -238,6 +262,7 @@ pub(crate) async fn run(logger: Logger, node: Node, addr: String) -> std::io::Re
 
     let mut app = App::with_state(node);
 
+    app.at("/version").get(version);
     app.at("/status").get(status);
     app.at("/kv/:id")
         .get(kv_get)

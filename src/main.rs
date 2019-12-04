@@ -22,6 +22,7 @@ mod pubsub;
 pub mod raft_node;
 pub mod service;
 pub mod storage;
+pub mod version;
 
 use crate::network::{ws, Network, RaftNetworkMsg};
 use crate::raft_node::*;
@@ -69,7 +70,9 @@ async fn raft_loop<N: Network>(
     pubsub: pubsub::Channel,
     network: N,
     logger: Logger,
-) {
+) where
+    N: 'static,
+{
     // Tick the raft node per 100ms. So use an `Instant` to trace it.
     let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
         RaftNode::create_raft_leader(&logger, id, pubsub, network).await
@@ -96,12 +99,20 @@ async fn raft_loop<N: Network>(
     }
     node.add_service(mring::ID, Box::new(vnode));
 
+    let version = crate::service::version::Service::new(&logger);
+    node.add_service(crate::service::version::ID, Box::new(version));
+
+    let status = crate::service::status::Service::new(&logger);
+    let status = Box::new(status);
+    node.add_service(service::status::ID, status);
+
     node.node_loop().await.unwrap()
 }
 
 fn main() -> std::io::Result<()> {
+    use version::VERSION;
     let matches = ClApp::new("cake")
-        .version("1.0")
+        .version(VERSION)
         .author("The Treamor Team")
         .about("Uring Demo")
         .arg(

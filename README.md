@@ -125,6 +125,28 @@ websocat ws://localhost:8081/uring
 {"Subscribe": {"channel": "uring"}}
 ```
 
+## ws - version
+
+```bash
+ websocat ws://127.0.0.1:8081/uring
+
+{"Select": {"rid": 1, "protocol": "Version" }}
+{"Selected":{"rid":1,"protocol":"Version"}}
+{"Get": {"rid": 1}}
+{"rid":1,"data":"0.1.0"}
+```
+
+## ws - status
+
+```bash
+websocat ws://127.0.0.1:8081/uring
+
+{"Select": {"rid": 1, "protocol": "Status" }}
+{"Selected":{"rid":1,"protocol":"Status"}}
+{"Get": {"rid": 1}}
+{"rid":1,"data":{"election_elapsed":1,"id":1,"last_index":9,"pass_election_timeout":false,"promotable":true,"randomized_election_timeout":13,"role":"Leader","term":2}}
+```
+
 ## python client example
 
 ```python

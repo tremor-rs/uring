@@ -21,10 +21,18 @@ pub enum Protocol {
     URing,
     KV,
     MRing,
+    Version,
+    Status,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ProtocolSelect {
+    Status {
+        rid: RequestId,
+    },
+    Version {
+        rid: RequestId,
+    },
     Select {
         rid: RequestId,
         protocol: Protocol,
@@ -72,6 +80,15 @@ pub enum MRRequest {
     GetNodes { rid: RequestId },
     AddNode { rid: RequestId, node: String },
     RemoveNode { rid: RequestId, node: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum VRequest {
+    Get { rid: RequestId },
+}
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum SRequest {
+    Get { rid: RequestId },
 }
 
 #[derive(Deserialize, Serialize, Debug)]

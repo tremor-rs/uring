@@ -14,10 +14,11 @@
 
 pub mod ws;
 
+use crate::network::ws::WsMessage;
 use crate::*;
 use async_trait::async_trait;
-use futures::channel::mpsc::{TryRecvError, UnboundedSender};
-use raft::eraftpb::Message as RaftMessage;
+use futures::channel::mpsc::{TryRecvError, UnboundedSender, Sender};
+pub use raft::eraftpb::Message as RaftMessage;
 use std::{fmt, io};
 
 #[derive(Debug)]
@@ -34,7 +35,9 @@ impl fmt::Display for Error {
 }
 
 pub enum RaftNetworkMsg {
-    Status(UnboundedSender<raft_node::RaftNodeStatus>),
+    Status(RequestId, Sender<WsMessage>),
+    Version(RequestId, Sender<WsMessage>), // FIXME normalize to WS for now to work with both rest/ws
+
     // Raft related
     AckProposal(ProposalId, bool),
     ForwardProposal(NodeId, ProposalId, ServiceId, EventId, Vec<u8>),
@@ -51,7 +54,7 @@ pub enum TryNextError {
 }
 
 #[async_trait]
-pub trait Network {
+pub trait Network: Send + Sync {
     async fn next(&mut self) -> Option<RaftNetworkMsg>;
     async fn ack_proposal(
         &mut self,
@@ -71,4 +74,46 @@ pub trait Network {
         eid: EventId,
         data: Vec<u8>,
     ) -> Result<(), Error>;
+}
+
+#[derive(Default)]
+pub struct NullNetwork {}
+
+#[async_trait]
+impl Network for NullNetwork {
+    async fn next(&mut self) -> Option<RaftNetworkMsg> {
+        unimplemented!()
+    }
+    async fn ack_proposal(
+        &mut self,
+        _to: NodeId,
+        _pid: ProposalId,
+        _success: bool,
+    ) -> Result<(), network::Error> {
+        unimplemented!()
+    }
+    async fn event_reply(
+        &mut self,
+        _id: EventId,
+        _reply: Option<Vec<u8>>,
+    ) -> Result<(), network::Error> {
+        unimplemented!()
+    }
+    async fn send_msg(&mut self, _msg: RaftMessage) -> Result<(), network::Error> {
+        unimplemented!()
+    }
+    fn connections(&self) -> Vec<NodeId> {
+        unimplemented!()
+    }
+    async fn forward_proposal(
+        &mut self,
+        _from: NodeId,
+        _to: NodeId,
+        _pid: ProposalId,
+        _sid: ServiceId,
+        _eid: EventId,
+        _data: Vec<u8>,
+    ) -> Result<(), network::Error> {
+        unimplemented!()
+    }
 }

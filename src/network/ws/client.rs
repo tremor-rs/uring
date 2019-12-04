@@ -11,18 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-// use crate::{NodeId, KV};
 
 use super::*;
-//use async_std::io;
 use async_std::net::TcpStream;
-//use async_std::prelude::*;
-//use async_std::task;
 use async_tungstenite::connect_async;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{select, FutureExt, StreamExt};
 use slog::Logger;
-//use std::env;
 use tungstenite::protocol::Message;
 use uring_common::NodeId;
 use ws_proto::{Protocol, ProtocolSelect};
@@ -86,7 +81,8 @@ impl Connection {
                     _ => (),
                 }
             } else {
-                //
+                dbg!(("unknown message type", msg));
+                // Nothing to do
                 ()
             }
         } else {
@@ -129,9 +125,17 @@ impl Connection {
                         error!(self.logger, "subscribe response not selected response for");
                         return false;
                     }
+                    ProtocolSelect::Version { .. } => {
+                        error!(self.logger, "version response not selected response for");
+                        return false;
+                    }
+                    ProtocolSelect::Status { .. } => {
+                        error!(self.logger, "status response not selected response for");
+                        return false;
+                    }
                 }
             } else {
-                //
+                dbg!(("unknown message type", msg));
                 ()
             }
         }

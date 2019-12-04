@@ -15,6 +15,7 @@
 pub mod placement;
 use super::*;
 use crate::{pubsub, storage, ServiceId};
+use async_std::sync::Mutex;
 use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::BufMut;
@@ -25,7 +26,6 @@ use std::marker::PhantomData;
 use uring_common::{MRingNodes, Relocations};
 use ws_proto::PSMRing;
 pub const ID: ServiceId = ServiceId(1);
-use async_std::sync::Mutex;
 use raft::RawNode;
 
 pub struct Service<Placement>
@@ -107,7 +107,7 @@ where
 #[async_trait]
 impl<Storage, Placement> super::Service<Storage> for Service<Placement>
 where
-    Storage: storage::Storage + Sync + Send + 'static,
+    Storage: storage::Storage + Send + Sync + 'static,
     Placement: placement::Placement + Send + Sync,
 {
     async fn execute(
@@ -116,15 +116,15 @@ where
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let raft_node = node.lock().await;
-        let storage = raft_node.store();
+        let raft = node.lock().await;
+        let storage = raft.store();
         match serde_json::from_slice(&event) {
             Ok(Event::GetSize) => Ok(self
                 .size(storage)
                 .await
                 .and_then(|size| serde_json::to_vec(&serde_json::Value::from(size)).ok())),
             Ok(Event::SetSize { size }) => {
-                let size = if let Some(size) = self.size(storage).await {
+                let size = if let Some(size) = self.size(&*storage).await {
                     size
                 } else {
                     let mut data = vec![0; 8];
@@ -151,12 +151,12 @@ where
             }
             Ok(Event::GetNodes) => Ok(storage.get(mring::ID.0 as u16, NODES).await),
             Ok(Event::AddNode { node }) => {
-                let size = if let Some(size) = self.size(storage).await {
+                let size = if let Some(size) = self.size(&*storage).await {
                     size
                 } else {
                     return Ok(None);
                 };
-                let next = if let Some(current) = self.nodes(storage).await {
+                let next = if let Some(current) = self.nodes(&*storage).await {
                     let (next, relocations) = Placement::add_node(size, current, node.clone());
                     pubsub
                         .send(pubsub::Msg::new(
@@ -193,13 +193,13 @@ where
                 Ok(Some(next))
             }
             Ok(Event::RemoveNode { node }) => {
-                let size = if let Some(size) = self.size(storage).await {
+                let size = if let Some(size) = self.size(&*storage).await {
                     size
                 } else {
                     return Ok(None);
                 };
 
-                if let Some(current) = self.nodes(storage).await {
+                if let Some(current) = self.nodes(&*storage).await {
                     let (next, relocations) = Placement::remove_node(size, current, node.clone());
                     pubsub
                         .send(pubsub::Msg::new(

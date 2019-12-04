@@ -19,7 +19,6 @@ use crate::network::{
     Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg, ServiceId,
 };
 use crate::pubsub;
-use crate::raft_node::RaftNodeStatus;
 use crate::service::{kv, mring};
 use crate::{NodeId, RequestId};
 use async_std::task;
@@ -62,6 +61,7 @@ pub(crate) enum Reply {
     Direct(UnboundedSender<Option<Vec<u8>>>),
     WS(RequestId, Sender<WsMessage>),
 }
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum CtrlMsg {
     Hello(NodeId, String),
@@ -82,7 +82,8 @@ pub(crate) enum UrMsg {
     RegisterRemote(NodeId, String, Sender<WsMessage>),
     DownLocal(NodeId),
     DownRemote(NodeId),
-    Status(UnboundedSender<RaftNodeStatus>),
+    Status(RequestId, Sender<WsMessage>),
+    Version(RequestId, Sender<WsMessage>),
 
     // Raft related
     AckProposal(ProposalId, bool),
@@ -173,7 +174,8 @@ impl NetworkTrait for Network {
                     mring::Event::remove_node(node),
                 ))
             }
-            UrMsg::Status(reply) => Some(Status(reply)),
+            UrMsg::Status(rid, reply) => Some(Status(rid, reply)),
+            UrMsg::Version(rid, reply) => Some(Version(rid, reply)),
             UrMsg::GetNode(id, reply) => Some(GetNode(id, reply)),
             UrMsg::AddNode(id, reply) => Some(AddNode(id, reply)),
             UrMsg::Get(key, reply) => {

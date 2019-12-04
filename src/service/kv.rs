@@ -16,10 +16,10 @@ use super::*;
 use crate::{pubsub, storage, ServiceId};
 use async_std::sync::Mutex;
 use async_trait::async_trait;
-use futures::SinkExt;
 use raft::RawNode;
 use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
+use futures::SinkExt;
 
 pub const ID: ServiceId = ServiceId(0);
 
@@ -105,7 +105,7 @@ impl Event {
 #[async_trait]
 impl<Storage> super::Service<Storage> for Service
 where
-    Storage: storage::Storage + Sync + Send + 'static,
+    Storage: storage::Storage + Send + Sync + 'static,
 {
     async fn execute(
         &mut self,
@@ -113,8 +113,9 @@ where
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let raft_node = node.lock().await;
-        let storage = raft_node.store();
+        let raft = node.lock().await;
+        let storage = raft.store();
+
         match serde_json::from_slice(&event) {
             Ok(Event::Get { key }) => {
                 debug!(
