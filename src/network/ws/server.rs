@@ -59,7 +59,11 @@ impl Connection {
     }
 
     async fn handle_initial(&mut self, msg: Message) -> bool {
-        if msg.is_text() {
+        self.handle_control(msg, false).await
+    }
+
+    async fn handle_control(&mut self, msg: Message, bail_on_fail: bool) -> bool {
+                if msg.is_text() {
             let text = msg.into_data();
             match serde_json::from_slice(&text) {
                 Ok(ProtocolSelect::Status { rid }) => self
@@ -98,18 +102,23 @@ impl Connection {
                     .await
                     .is_ok(),
                 Err(e) => {
-                    error!(
-                        self.node.logger,
-                        "Failed to decode ProtocolSelect message: {} => {}",
-                        e,
-                        String::from_utf8(text).unwrap_or_default()
-                    );
-                    true
+                    if !bail_on_fail { 
+                        false 
+                    } else {
+                        error!(
+                            self.node.logger,
+                            "Failed to decode ProtocolSelect message: {} => {}",
+                            e,
+                            String::from_utf8(text).unwrap_or_default()
+                        );
+                        true
+                    }
                 }
             }
         } else {
             true
         }
+
     }
 
     async fn handle_uring(&mut self, msg: Message) -> bool {
@@ -142,7 +151,7 @@ impl Connection {
                         e,
                         String::from_utf8(text).unwrap_or_default()
                     );
-                    true
+                    false
                 }
             }
         } else if msg.is_binary() {
@@ -166,7 +175,7 @@ impl Connection {
                         e,
                         String::from_utf8(text).unwrap_or_default()
                     );
-                    true
+                    false
                 }
             }
         } else {
@@ -231,7 +240,7 @@ impl Connection {
                         e,
                         String::from_utf8(text).unwrap_or_default()
                     );
-                    true
+                    false
                 }
             }
         } else {
@@ -285,7 +294,7 @@ impl Connection {
                         e,
                         String::from_utf8(text).unwrap_or_default()
                     );
-                    true
+                    false
                 }
             }
         } else {
@@ -317,7 +326,7 @@ impl Connection {
                         e,
                         String::from_utf8(text).unwrap_or_default()
                     );
-                    true
+                    false
                 }
             }
         } else {
@@ -342,14 +351,18 @@ impl Connection {
             let cont = select! {
                 msg = self.rx.next() => {
                     if let Some(msg) = msg {
-                        match self.protocol {
-                            None => self.handle_initial(msg).await,
-                            Some(Protocol::KV) => self.handle_kv(msg).await,
-                            Some(Protocol::URing) => self.handle_uring(msg).await,
-                            Some(Protocol::MRing) => self.handle_mring(msg).await,
-                            Some(Protocol::Version) => self.handle_version(msg).await,
-                            Some(Protocol::Status) => self.handle_status(msg).await,
-                        }
+                          let msg2 = msg.clone();
+//                        if !self.handle_control(msg.clone(), false).await {
+                            let handled_ok = match self.protocol {
+                                None => self.handle_initial(msg).await,
+                                Some(Protocol::KV) => self.handle_kv(msg).await,
+                                Some(Protocol::URing) => self.handle_uring(msg).await,
+                                Some(Protocol::MRing) => self.handle_mring(msg).await,
+                                Some(Protocol::Version) => self.handle_version(msg).await,
+                                Some(Protocol::Status) => self.handle_status(msg).await,
+                            };
+                            
+                            handled_ok || self.handle_control(msg2, true).await
                     } else {
                         false
                     }

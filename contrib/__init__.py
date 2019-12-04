@@ -303,7 +303,7 @@ class RaftClient(ChannelObserver):
         self.ws.send(simplejson.dumps({
             "SetSize": {
                 "rid": self.rid,
-                "size": size,
+                "size": int(size),
             }
         }))
         self.rid = self.rid + 1
