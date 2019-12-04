@@ -30,6 +30,8 @@ use slog::Drain;
 use std::env;
 use tungstenite::protocol::Message;
 
+const CHANNEL_SIZE: usize = 64usize;
+
 #[macro_use]
 extern crate slog;
 

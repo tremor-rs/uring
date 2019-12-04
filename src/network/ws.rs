@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::io;
 use ws_proto::Reply as ProtoReply;
 
-type LocalMailboxes = HashMap<NodeId, UnboundedSender<WsMessage>>;
+type LocalMailboxes = HashMap<NodeId, Sender<WsMessage>>;
 type RemoteMailboxes = HashMap<NodeId, Sender<WsMessage>>;
 
 #[derive(Clone)]
@@ -72,13 +72,8 @@ pub enum CtrlMsg {
 
 pub(crate) enum UrMsg {
     // Network related
-    InitLocal(UnboundedSender<WsMessage>),
-    RegisterLocal(
-        NodeId,
-        String,
-        UnboundedSender<WsMessage>,
-        Vec<(NodeId, String)>,
-    ),
+    InitLocal(Sender<WsMessage>),
+    RegisterLocal(NodeId, String, Sender<WsMessage>, Vec<(NodeId, String)>),
     RegisterRemote(NodeId, String, Sender<WsMessage>),
     DownLocal(NodeId),
     DownRemote(NodeId),
@@ -210,13 +205,14 @@ impl NetworkTrait for Network {
             // Connection handling of websocket connections
             // partially based on the problem that actix ws client
             // doens't reconnect
-            UrMsg::InitLocal(endpoint) => {
+            UrMsg::InitLocal(mut endpoint) => {
                 info!(self.logger, "Initializing local endpoint");
                 endpoint
-                    .unbounded_send(WsMessage::Ctrl(CtrlMsg::Hello(
+                    .send(WsMessage::Ctrl(CtrlMsg::Hello(
                         self.id,
                         self.endpoint.clone(),
                     )))
+                    .await
                     .unwrap();
                 self.next().await
             }
@@ -286,9 +282,10 @@ impl NetworkTrait for Network {
         pid: ProposalId,
         success: bool,
     ) -> Result<(), Error> {
-        if let Some(remote) = self.local_mailboxes.get(&to) {
+        if let Some(remote) = self.local_mailboxes.get_mut(&to) {
             remote
-                .unbounded_send(WsMessage::Ctrl(CtrlMsg::AckProposal(pid, success)))
+                .send(WsMessage::Ctrl(CtrlMsg::AckProposal(pid, success)))
+                .await
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get_mut(&to) {
             remote
@@ -305,9 +302,10 @@ impl NetworkTrait for Network {
 
     async fn send_msg(&mut self, msg: RaftMessage) -> Result<(), Error> {
         let to = NodeId(msg.to);
-        if let Some(remote) = self.local_mailboxes.get(&to) {
+        if let Some(remote) = self.local_mailboxes.get_mut(&to) {
             remote
-                .unbounded_send(WsMessage::Raft(msg))
+                .send(WsMessage::Raft(msg))
+                .await
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, e)))
         } else if let Some(remote) = self.remote_mailboxes.get_mut(&to) {
             remote
@@ -339,9 +337,10 @@ impl NetworkTrait for Network {
         data: Vec<u8>,
     ) -> Result<(), Error> {
         let msg = WsMessage::Ctrl(CtrlMsg::ForwardProposal(from, pid, sid, eid, data));
-        if let Some(remote) = self.local_mailboxes.get(&to) {
+        if let Some(remote) = self.local_mailboxes.get_mut(&to) {
             remote
-                .unbounded_send(msg)
+                .send(msg)
+                .await
                 .map_err(|e| Error::Generic(format!("{}", e)))
         } else if let Some(remote) = self.remote_mailboxes.get_mut(&to) {
             remote

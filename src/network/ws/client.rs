@@ -15,7 +15,7 @@
 use super::*;
 use async_std::net::TcpStream;
 use async_tungstenite::connect_async;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::{channel, Receiver, Sender, UnboundedSender};
 use futures::{select, FutureExt, StreamExt};
 use slog::Logger;
 use tungstenite::protocol::Message;
@@ -42,8 +42,8 @@ pub(crate) struct Connection {
     //    my_id: u64,
     remote_id: NodeId,
     master: UnboundedSender<UrMsg>,
-    tx: UnboundedSender<WsMessage>,
-    rx: UnboundedReceiver<WsMessage>,
+    tx: Sender<WsMessage>,
+    rx: Receiver<WsMessage>,
     logger: Logger,
     ws_stream: WSStream,
     handshake_done: bool,
@@ -51,7 +51,7 @@ pub(crate) struct Connection {
 
 /// Handle server websocket messages
 impl Connection {
-    fn handle(&mut self, msg: Message) -> bool {
+    async fn handle(&mut self, msg: Message) -> bool {
         if self.handshake_done {
             if msg.is_binary() {
                 let msg = decode_ws(&msg.into_data());
@@ -64,12 +64,9 @@ impl Connection {
                         self.remote_id = id;
                         eat_error_and_blow!(
                             self.logger,
-                            self.master.unbounded_send(UrMsg::RegisterLocal(
-                                id,
-                                peer,
-                                self.tx.clone(),
-                                peers
-                            ))
+                            self.master
+                                .send(UrMsg::RegisterLocal(id, peer, self.tx.clone(), peers))
+                                .await
                         );
                     }
                     CtrlMsg::AckProposal(pid, success) => {
@@ -157,7 +154,7 @@ async fn worker(
             error!(logger, "Failed to connect to {}", endpoint);
             break;
         };
-        let (tx, rx) = unbounded::<WsMessage>();
+        let (tx, rx) = channel::<WsMessage>(crate::CHANNEL_SIZE);
         ws_stream
             .send(Message::Text(
                 serde_json::to_string(&ProtocolSelect::Select {
@@ -188,7 +185,7 @@ async fn worker(
                 },
                 msg = c.ws_stream.next().fuse() => {
                     if let Some(Ok(msg)) = msg {
-                        c.handle(msg)
+                        c.handle(msg).await
                     } else {
                         false
                     }
