@@ -72,7 +72,7 @@ async fn pubsub_loop(logger: Logger, mut rx: Receiver<Msg>) {
 
 pub(crate) fn start(logger: &Logger) -> Channel {
     let logger = logger.clone();
-    let (tx, rx) = channel(64);
+    let (tx, rx) = channel(crate::CHANNEL_SIZE);
 
     task::spawn(pubsub_loop(logger, rx));
     tx

@@ -101,8 +101,8 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: Sender<Task
     // Create a channel for our stream, which other sockets will use to
     // send us messages. Then register our address with the stream to send
     // data to us.
-    let (mut msg_tx, msg_rx) = channel(64);
-    let (response_tx, mut response_rx) = channel(64);
+    let (mut msg_tx, msg_rx) = channel(crate::CHANNEL_SIZE);
+    let (response_tx, mut response_rx) = channel(crate::CHANNEL_SIZE);
     let c = Connection {
         addr: addr,
         rx: msg_rx,

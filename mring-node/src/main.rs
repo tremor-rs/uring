@@ -110,7 +110,7 @@ fn main() {
     let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root(drain, o!());
 
-    let (tasks_tx, tasks_rx) = channel(64);
+    let (tasks_tx, tasks_rx) = channel(crate::CHANNEL_SIZE);
 
     let local = env::args()
         .nth(1)

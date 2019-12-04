@@ -106,7 +106,7 @@ impl HandoffWorker {
             self.logger,
             "requesting chunk {} from vnode {}", chunk, vnode
         );
-        let (tx, mut rx) = channel(64);
+        let (tx, mut rx) = channel(crate::CHANNEL_SIZE);
         if self
             .cnc
             .send(Cmd::GetHandoffData {
@@ -360,7 +360,7 @@ pub(crate) async fn tick_loop(
     mut tasks_tx: Sender<Task>,
 ) {
     let mut vnodes: HashMap<u64, VNode> = HashMap::new();
-    let (cnc_tx, mut cnc_rx) = channel(64);
+    let (cnc_tx, mut cnc_rx) = channel(crate::CHANNEL_SIZE);
 
     let mut ticks = async_std::stream::interval(Duration::from_secs(1));
     loop {

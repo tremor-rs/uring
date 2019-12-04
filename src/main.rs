@@ -39,6 +39,8 @@ use std::time::{Duration, Instant};
 pub use uring_common::*;
 use ws_proto::PSURing;
 
+const CHANNEL_SIZE: usize = 64usize;
+
 #[macro_use]
 extern crate slog;
 

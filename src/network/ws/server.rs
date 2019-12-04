@@ -43,8 +43,8 @@ pub(crate) struct Connection {
 
 impl Connection {
     pub(crate) fn new(node: Node, rx: Receiver<Message>, tx: Sender<Message>) -> Self {
-        let (ps_tx, ps_rx) = channel(64);
-        let (ws_tx, ws_rx) = channel(64);
+        let (ps_tx, ps_rx) = channel(crate::CHANNEL_SIZE);
+        let (ws_tx, ws_rx) = channel(crate::CHANNEL_SIZE);
         Self {
             node,
             remote_id: NodeId(0),
@@ -411,8 +411,8 @@ where
     // Create a channel for our stream, which other sockets will use to
     // send us messages. Then register our address with the stream to send
     // data to us.
-    let (mut msg_tx, msg_rx) = channel(64);
-    let (response_tx, mut response_rx) = channel(64);
+    let (mut msg_tx, msg_rx) = channel(crate::CHANNEL_SIZE);
+    let (response_tx, mut response_rx) = channel(crate::CHANNEL_SIZE);
     let c = Connection::new(node, msg_rx, response_tx);
     task::spawn(c.msg_loop(logger.clone()));
 
