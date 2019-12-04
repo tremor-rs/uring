@@ -122,15 +122,15 @@ where
                     "READ {:?}",
                     String::from_utf8(key.clone()).ok()
                 );
-                Ok((
-                    200u16,
-                    storage
-                        .get(self.scope, &key)
-                        .await
-                        .and_then(|v| String::from_utf8(v).ok())
-                        .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())
-                        .unwrap(),
-                ))
+                if let Some(s) = storage
+                    .get(self.scope, &key)
+                    .await
+                    .and_then(|v| String::from_utf8(v).ok())
+                {
+                    Ok((200u16, serde_json::to_vec(&s).unwrap()))
+                } else {
+                    Ok((404u16, serde_json::to_vec(&"not found").ok().unwrap()))
+                }
             }
             Ok(Event::Put { key, value }) => {
                 debug!(
@@ -158,11 +158,12 @@ where
                     })
                     .await
                     .unwrap();
-                Ok((
-                    201,
-                    old.and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())
-                        .unwrap(),
-                ))
+
+                if let Some(old) = old {
+                    Ok((201, serde_json::to_vec(&old).unwrap()))
+                } else {
+                    Ok((201, serde_json::to_vec(&serde_json::Value::Null).unwrap()))
+                }
             }
             Ok(Event::Cas {
                 key,
@@ -222,7 +223,7 @@ where
                 }
             }
             Ok(Event::Delete { key }) => Ok((
-                200,
+                200u16,
                 storage
                     .delete(self.scope, &key)
                     .await
