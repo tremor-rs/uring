@@ -129,10 +129,10 @@ where
         self.services.insert(sid, service);
     }
     /*
-    pub fn store(&self) -> &Storage {
-        let raft_node = block_on(self.raft_group.as_ref().unwrap().lock());
-        raft_node.raft.store()
-    }
+        pub fn store(&self) -> &Storage {
+            let raft_node = block_on(self.raft_group.as_ref().unwrap().lock());
+            raft_node.raft.store()
+        }
     pub async fn mut_store(&mut self) -> &mut Storage {
         self.raft_group.as_mut().unwrap().lock().await.raft.mut_store()
     }

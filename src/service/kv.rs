@@ -114,7 +114,7 @@ where
         event: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, Error> {
         let raft_node = node.lock().await;
-        let storage = raft_node.raft.store();
+        let storage = raft_node.store();
         match serde_json::from_slice(&event) {
             Ok(Event::Get { key }) => {
                 debug!(
