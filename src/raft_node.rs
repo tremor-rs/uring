@@ -87,13 +87,12 @@ where
     Network: network::Network,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(ref g) = self.raft_group {
-            block_on({
-                async {
-                    let raft = &block_on(g.lock()).raft;
-                    write!(
-                        f,
-                        r#"node id: {}
+        if let Some(g) = self.raft_group.as_ref() {
+            let role = self.role();
+            let g = g.try_lock().unwrap();
+            write!(
+                f,
+                r#"node id: {}
 role: {:?}
 promotable: {}
 pass election timeout: {}
@@ -107,22 +106,22 @@ votes: {:?}
 nodes: {:?}
 connections: {:?}
             "#,
-                        raft.id,
-                        self.role().await,
-                        raft.promotable(),
-                        raft.pass_election_timeout(),
-                        raft.election_elapsed,
-                        raft.randomized_election_timeout(),
-                        raft.leader_id,
-                        raft.term,
-                        raft.raft_log.store.last_index().unwrap_or(0),
-                        raft.vote,
-                        raft.votes,
-                        raft.prs().configuration().voters(),
-                        self.network.connections(),
-                    ).ok();
-                }
-            });
+                &g.raft.id,
+                role,
+                g.raft.promotable(),
+                g.raft.pass_election_timeout(),
+                g.raft.election_elapsed,
+                g.raft.randomized_election_timeout(),
+                &g.raft.leader_id,
+                &g.raft.term,
+                &g.raft.store().last_index().unwrap_or(0),
+                &g.raft.vote,
+                &g.raft.votes,
+                &g.raft.prs().configuration().voters(),
+                &self.network.connections(),
+            )
+        } else {
+            write!(f, "UNINITIALIZED")
         }
 
         Ok(())
@@ -226,7 +225,7 @@ where
                     }
 
 
-                    let this_state = self.role().await;
+                    let this_state = self.role();
                     if this_state != self.last_state {
                         let prev_state = format!("{:?}", self.last_state);
                         let next_state = format!("{:?}", this_state);
@@ -243,7 +242,7 @@ where
                             .unwrap();
                         self.last_state = this_state;
                     }
-                    self.raft_group.as_mut().unwrap().lock().await.tick();
+                    self.raft_group.as_mut().unwrap().try_lock().unwrap().tick();
                     self.on_ready().await.unwrap();
                     if self.is_leader() {
                         // Handle new proposals.
@@ -330,19 +329,21 @@ where
 
     pub async fn node_known(&self, id: NodeId) -> bool {
         if let Some(ref g) = self.raft_group {
-            g.lock().await.raft.prs().configuration().contains(id.0)
+            g.try_lock().unwrap().raft.prs().configuration().contains(id.0)
         } else {
             false
         }
     }
     pub async fn log(&self) {
         if let Some(g) = self.raft_group.as_ref() {
-            let raft = &g.lock().await.raft;
+            let role = self.role();
+            let g = g.try_lock().unwrap();
+            let raft = &g.raft;
             info!(
                 self.logger,
                 "NODE STATE";
-                "node-id" => raft.id,
-                "role" => format!("{:?}", self.role().await),
+                "node-id" => &raft.id,
+                "role" => format!("{:?}", role),
 
                 "leader-id" => raft.leader_id,
                 "term" => raft.term,
@@ -369,16 +370,16 @@ where
     pub fn is_running(&self) -> bool {
         self.raft_group.is_some()
     }
-    pub async fn role(&self) -> StateRole {
+    pub fn role(&self) -> StateRole {
         self.raft_group
             .as_ref()
-            .map(|g| block_on(async { g.lock().await.raft.state }))
+            .map(|g| g.try_lock().unwrap().raft.state)
             .unwrap_or(StateRole::PreCandidate)
     }
     pub fn is_leader(&self) -> bool {
         self.raft_group
             .as_ref()
-            .map(|g| task::block_on(g.lock()).raft.state == StateRole::Leader)
+            .map(|g| g.try_lock().unwrap().raft.state == StateRole::Leader)
             .unwrap_or_default()
     }
 
@@ -386,7 +387,7 @@ where
         NodeId(
             self.raft_group
                 .as_ref()
-                .map(|g| task::block_on(async { g.lock().await.raft.leader_id }))
+                .map(|g| g.try_lock().unwrap().raft.leader_id)
                 .unwrap_or_default(),
         )
     }
@@ -475,60 +476,28 @@ where
                 return Ok(());
             }
         }
-        let raft_group = self.raft_group.as_mut().unwrap();
-        raft_group.lock().await.step(msg)
+        let mut raft_group = self.raft_group.as_mut().unwrap().try_lock().unwrap();
+        raft_group.step(msg)
     }
     async fn append(&self, entries: &[Entry]) -> Result<()> {
-        self.raft_group
-            .as_ref()
-            .unwrap()
-            .lock()
-            .await
-            .raft
-            .raft_log
-            .store
-            .append(entries)
-            .await
+        let raft_node = self.raft_group.as_ref().unwrap().try_lock().unwrap();
+        raft_node.store().append(entries).await
     }
     async fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
-        self.raft_group
-            .as_mut()
-            .unwrap()
-            .lock()
-            .await
-            .raft
-            .raft_log
-            .store
-            .apply_snapshot(snapshot)
-            .await
+        let mut raft_node = self.raft_group.as_ref().unwrap().try_lock().unwrap();
+        raft_node.mut_store().apply_snapshot(snapshot).await
     }
 
     // interface for raft-rs
     async fn set_conf_state(&mut self, cs: ConfState) -> Result<()> {
-        self.raft_group
-            .as_mut()
-            .unwrap()
-            .lock()
-            .await
-            .raft
-            .raft_log
-            .store
-            .set_conf_state(cs)
-            .await
+        let mut raft_node = self.raft_group.as_ref().unwrap().try_lock().unwrap();
+        raft_node.mut_store().set_conf_state(cs).await
     }
 
     // interface for raft-rs
     async fn set_hard_state(&mut self, commit: u64, term: u64) -> Result<()> {
-        self.raft_group
-            .as_mut()
-            .unwrap()
-            .lock()
-            .await
-            .raft
-            .raft_log
-            .store
-            .set_hard_state(commit, term)
-            .await
+        let mut raft_node = self.raft_group.as_ref().unwrap().try_lock().unwrap();
+        raft_node.mut_store().set_hard_state(commit, term).await
     }
 
     pub(crate) async fn on_ready(&mut self) -> Result<()> {
@@ -536,12 +505,12 @@ where
             return Ok(());
         };
 
-        if !self.raft_group.as_ref().unwrap().lock().await.has_ready() {
+        if !self.raft_group.as_ref().unwrap().try_lock().unwrap().has_ready() {
             return Ok(());
         }
 
         // Get the `Ready` with `RawNode::ready` interface.
-        let mut ready = self.raft_group.as_mut().unwrap().lock().await.ready();
+        let mut ready = self.raft_group.as_mut().unwrap().try_lock().unwrap().ready();
 
         // Persistent raft logs. It's necessary because in `RawNode::advance` we stabilize
         // raft logs to the latest position.
@@ -581,8 +550,8 @@ where
                         .raft_group
                         .as_mut()
                         .unwrap()
-                        .lock()
-                        .await
+                        .try_lock()
+                        .unwrap()
                         .apply_conf_change(&cc)
                         .unwrap();
                     self.set_conf_state(cs).await?;
@@ -614,7 +583,7 @@ where
                         }
                     }
                 }
-                if self.raft_group.as_ref().unwrap().lock().await.raft.state == StateRole::Leader {
+                if self.raft_group.as_ref().unwrap().try_lock().unwrap().raft.state == StateRole::Leader {
                     // The leader should response to the clients, tell them if their proposals
                     // succeeded or not.
                     if let Some(proposal) = self.proposals.pop_front() {
@@ -645,14 +614,14 @@ where
         self.raft_group
             .as_mut()
             .unwrap()
-            .lock()
-            .await
+            .try_lock()
+            .unwrap()
             .advance(ready);
         Ok(())
     }
 
     pub(crate) async fn propose_all(&mut self) -> Result<()> {
-        let mut raft_group = self.raft_group.as_mut().unwrap().lock().await;
+        let mut raft_group = self.raft_group.as_mut().unwrap().try_lock().unwrap();
         let mut pending = Vec::new();
         for p in self.proposals.iter_mut().skip_while(|p| p.proposed > 0) {
             if propose_and_check_failed_proposal(&mut *raft_group, p)? {
@@ -685,7 +654,7 @@ pub async fn status<Storage>(node: &Mutex<raft::RawNode<Storage>>) -> Result<Raf
 where
     Storage: storage::Storage,
 {
-    let node = &node.lock().await;
+    let node = node.try_lock().unwrap();
     Ok(RaftNodeStatus {
         id: node.raft.id,
         role: format!("{:?}", node.raft.state),
