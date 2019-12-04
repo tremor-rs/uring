@@ -119,15 +119,21 @@ where
         let raft_node = node.try_lock().unwrap();
         let storage = raft_node.store();
         match serde_json::from_slice(&event) {
-            Ok(Event::GetSize) => Ok((
-                200u16,
-                self.size(storage)
-                    .await
-                    .and_then(|size| serde_json::to_vec(&serde_json::Value::from(size)).ok())
-                    .unwrap(),
-            )),
+            Ok(Event::GetSize) => {
+                if let Some(size) = self.size(storage).await {
+                    Ok((
+                        200u16,
+                        serde_json::to_vec(&serde_json::Value::from(size)).unwrap(),
+                    ))
+                } else {
+                    Ok((
+                        404u16,
+                        serde_json::to_vec(&serde_json::Value::Null).unwrap(),
+                    ))
+                }
+            }
             Ok(Event::SetSize { size }) => {
-                if let Some(size) = self.size(&*storage).await {
+                if let Some(size) = self.size(storage).await {
                     return Ok((
                         409,
                         serde_json::to_vec(&serde_json::Value::from(size)).unwrap(),
@@ -139,7 +145,7 @@ where
                     let mut data = Cursor::new(&mut data[..]);
                     data.put_u64_be(size);
                 }
-                storage.put(mring::ID.0 as u16, RING_SIZE, &data);
+                storage.put(mring::ID.0 as u16, RING_SIZE, &data).await;
 
                 pubsub
                     .send(pubsub::Msg::new(
@@ -197,7 +203,7 @@ where
                     next
                 };
                 let next = serde_json::to_vec(&next).unwrap();
-                storage.put(mring::ID.0 as u16, NODES, &next);
+                storage.put(mring::ID.0 as u16, NODES, &next).await;
                 Ok((200, next))
             }
             Ok(Event::RemoveNode { node }) => {
@@ -222,7 +228,7 @@ where
                         .await
                         .unwrap();
                     let next = serde_json::to_vec(&next).unwrap();
-                    storage.put(mring::ID.0 as u16, NODES, &next);
+                    storage.put(mring::ID.0 as u16, NODES, &next).await;
                     Ok((200, next))
                 } else {
                     return Ok((
