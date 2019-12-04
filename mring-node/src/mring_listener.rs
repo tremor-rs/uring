@@ -15,7 +15,7 @@
 use super::*;
 use async_tungstenite::connect_async;
 use futures::channel::mpsc::Sender;
-use futures::{select, FutureExt, SinkExt, StreamExt};
+use futures::{select, FutureExt, StreamExt};
 use slog::Logger;
 use tungstenite::protocol::Message;
 use uring_common::{MRingNodes, Relocations, RequestId};

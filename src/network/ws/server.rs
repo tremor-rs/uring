@@ -22,7 +22,7 @@ use async_std::net::ToSocketAddrs;
 use async_std::task;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::{select, FutureExt, SinkExt, StreamExt};
+use futures::{select, FutureExt, StreamExt};
 use std::io::Error;
 use tungstenite::protocol::Message;
 use ws_proto::*;
