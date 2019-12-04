@@ -183,13 +183,13 @@ where
                                 self.network.event_reply(eid, None).await.unwrap();
                             }
                         }
-                        RaftNetworkMsg::GetNode(id, reply) => {
+                        RaftNetworkMsg::GetNode(id, mut reply) => {
                             info!(self.logger, "Getting node status"; "id" => id);
-                            reply.unbounded_send(self.node_known(id).await).unwrap();
+                            reply.send(self.node_known(id).await).await.unwrap();
                         }
-                        RaftNetworkMsg::AddNode(id, reply) => {
+                        RaftNetworkMsg::AddNode(id, mut reply) => {
                             info!(self.logger, "Adding node"; "id" => id);
-                            reply.unbounded_send(self.add_node(id).await).unwrap();
+                            reply.send(self.add_node(id).await).await.unwrap();
                         }
                         RaftNetworkMsg::AckProposal(pid, success) => {
                             info!(self.logger, "proposal acknowledged"; "pid" => pid);

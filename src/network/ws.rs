@@ -58,7 +58,7 @@ pub struct Network {
 }
 
 pub(crate) enum Reply {
-    Direct(UnboundedSender<Option<Vec<u8>>>),
+    Direct(Sender<Option<Vec<u8>>>),
     WS(RequestId, Sender<WsMessage>),
 }
 
@@ -89,8 +89,8 @@ pub(crate) enum UrMsg {
     AckProposal(ProposalId, bool),
     ForwardProposal(NodeId, ProposalId, ServiceId, EventId, Vec<u8>),
     RaftMsg(RaftMessage),
-    GetNode(NodeId, UnboundedSender<bool>),
-    AddNode(NodeId, UnboundedSender<bool>),
+    GetNode(NodeId, Sender<bool>),
+    AddNode(NodeId, Sender<bool>),
 
     // KV related
     Get(Vec<u8>, Reply),
@@ -120,7 +120,7 @@ impl NetworkTrait for Network {
                 )
                 .await
                 .unwrap(),
-            Some(Reply::Direct(sender)) => sender.unbounded_send(data).unwrap(),
+            Some(Reply::Direct(mut sender)) => sender.send(data).await.unwrap(),
             None => error!(self.logger, "Uknown event id {} for reply: {:?}", id, data),
         };
         Ok(())

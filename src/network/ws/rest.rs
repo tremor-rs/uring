@@ -16,7 +16,7 @@
 use super::Node;
 use super::*;
 use crate::{NodeId, KV};
-use futures::channel::mpsc::{unbounded, channel};
+use futures::channel::mpsc::channel;
 use http::StatusCode;
 use tide::{ResultExt, Request, Response, IntoResponse};
 use serde::Serialize;
@@ -64,7 +64,7 @@ async fn status(cx: Request<Node>) -> Result<Response> {
 }
 
 async fn kv_get(cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let key: String = cx.param("id").client_err()?;
     let id = key.clone().into_bytes();
     info!(cx.state().logger, "GET /kv/{}", key);
@@ -89,7 +89,7 @@ struct PostBody {
 }
 
 async fn kv_post(mut cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let key: String = cx.param("id").client_err()?;
     let id = key.clone().into_bytes();
     let body: PostBody = cx.body_json().await.client_err()?;
@@ -125,7 +125,7 @@ fn response_json_200<S: Serialize>(v: S) -> Response {
 
 
 async fn kv_cas(mut cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let id: String = cx.param("id").client_err()?;
     let id = id.into_bytes();
     let body: CasBody = cx.body_json().await.client_err()?;
@@ -154,7 +154,7 @@ async fn kv_cas(mut cx: Request<Node>) -> Result<Response> {
 }
 
 async fn kv_delete(cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let key: String = cx.param("id").client_err()?;
     let id = key.clone().into_bytes();
     cx.state()
@@ -171,7 +171,7 @@ async fn kv_delete(cx: Request<Node>) -> Result<Response> {
 }
 
 async fn uring_get(cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let id: u64 = cx.param("id").client_err()?;
     cx.state()
         .tx
@@ -185,7 +185,7 @@ async fn uring_get(cx: Request<Node>) -> Result<Response> {
 }
 
 async fn uring_post(cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let id: u64 = cx.param("id").client_err()?;
     cx.state()
         .tx
@@ -202,7 +202,7 @@ pub struct MRingSize {
     size: u64,
 }
 async fn mring_get_size(cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     cx.state()
         .tx
         .unbounded_send(UrMsg::MRingGetSize(Reply::Direct(tx)))
@@ -216,7 +216,7 @@ async fn mring_get_size(cx: Request<Node>) -> Result<Response> {
 }
 
 async fn mring_set_size(mut cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let body: MRingSize = cx.body_json().await.client_err()?;
     cx.state()
         .tx
@@ -231,7 +231,7 @@ async fn mring_set_size(mut cx: Request<Node>) -> Result<Response> {
 }
 
 async fn mring_get_nodes(cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     cx.state()
         .tx
         .unbounded_send(UrMsg::MRingGetNodes(Reply::Direct(tx)))
@@ -250,7 +250,7 @@ pub struct MRingNode {
 }
 
 async fn mring_add_node(mut cx: Request<Node>) -> Result<Response> {
-    let (tx, mut rx) = unbounded();
+    let (tx, mut rx) = channel(64);
     let body: MRingNode = cx.body_json().await.client_err()?;
     cx.state()
         .tx

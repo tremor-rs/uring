@@ -17,8 +17,8 @@ pub mod ws;
 use crate::network::ws::WsMessage;
 use crate::*;
 use async_trait::async_trait;
-use futures::channel::mpsc::{TryRecvError, UnboundedSender, Sender};
-pub use raft::eraftpb::Message as RaftMessage;
+use futures::channel::mpsc::{TryRecvError, Sender};
+use raft::eraftpb::Message as RaftMessage;
 use std::{fmt, io};
 
 #[derive(Debug)]
@@ -41,8 +41,8 @@ pub enum RaftNetworkMsg {
     // Raft related
     AckProposal(ProposalId, bool),
     ForwardProposal(NodeId, ProposalId, ServiceId, EventId, Vec<u8>),
-    GetNode(NodeId, UnboundedSender<bool>),
-    AddNode(NodeId, UnboundedSender<bool>),
+    GetNode(NodeId, Sender<bool>),
+    AddNode(NodeId, Sender<bool>),
 
     Event(EventId, ServiceId, Vec<u8>),
     RaftMsg(RaftMessage),
