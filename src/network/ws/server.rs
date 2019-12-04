@@ -181,7 +181,7 @@ impl Connection {
                 .tx
                 .unbounded_send(UrMsg::Get(
                     key.into_bytes(),
-                    WsReply::WS(rid, self.ws_tx.clone()),
+                    WsReply(rid, self.ws_tx.clone()),
                 ))
                 .is_ok(),
             KVRequest::Put { rid, key, store } => self
@@ -190,7 +190,7 @@ impl Connection {
                 .unbounded_send(UrMsg::Put(
                     key.into_bytes(),
                     store.into_bytes(),
-                    WsReply::WS(rid, self.ws_tx.clone()),
+                    WsReply(rid, self.ws_tx.clone()),
                 ))
                 .is_ok(),
             KVRequest::Delete { rid, key } => self
@@ -198,7 +198,7 @@ impl Connection {
                 .tx
                 .unbounded_send(UrMsg::Delete(
                     key.into_bytes(),
-                    WsReply::WS(rid, self.ws_tx.clone()),
+                    WsReply(rid, self.ws_tx.clone()),
                 ))
                 .is_ok(),
             KVRequest::Cas {
@@ -213,7 +213,7 @@ impl Connection {
                     key.into_bytes(),
                     check.map(String::into_bytes),
                     store.into_bytes(),
-                    WsReply::WS(rid, self.ws_tx.clone()),
+                    WsReply(rid, self.ws_tx.clone()),
                 ))
                 .is_ok(),
         }
@@ -244,36 +244,30 @@ impl Connection {
             MRRequest::GetSize { rid } => self
                 .node
                 .tx
-                .unbounded_send(UrMsg::MRingGetSize(WsReply::WS(rid, self.ws_tx.clone())))
+                .unbounded_send(UrMsg::MRingGetSize(WsReply(rid, self.ws_tx.clone())))
                 .is_ok(),
 
             MRRequest::SetSize { rid, size } => self
                 .node
                 .tx
-                .unbounded_send(UrMsg::MRingSetSize(
-                    size,
-                    WsReply::WS(rid, self.ws_tx.clone()),
-                ))
+                .unbounded_send(UrMsg::MRingSetSize(size, WsReply(rid, self.ws_tx.clone())))
                 .is_ok(),
             MRRequest::GetNodes { rid } => self
                 .node
                 .tx
-                .unbounded_send(UrMsg::MRingGetNodes(WsReply::WS(rid, self.ws_tx.clone())))
+                .unbounded_send(UrMsg::MRingGetNodes(WsReply(rid, self.ws_tx.clone())))
                 .is_ok(),
             MRRequest::AddNode { rid, node } => self
                 .node
                 .tx
-                .unbounded_send(UrMsg::MRingAddNode(
-                    node,
-                    WsReply::WS(rid, self.ws_tx.clone()),
-                ))
+                .unbounded_send(UrMsg::MRingAddNode(node, WsReply(rid, self.ws_tx.clone())))
                 .is_ok(),
             MRRequest::RemoveNode { rid, node } => self
                 .node
                 .tx
                 .unbounded_send(UrMsg::MRingRemoveNode(
                     node,
-                    WsReply::WS(rid, self.ws_tx.clone()),
+                    WsReply(rid, self.ws_tx.clone()),
                 ))
                 .is_ok(),
         }
@@ -365,13 +359,13 @@ impl Connection {
                     match self.protocol {
                         None | Some(Protocol::Status) | Some(Protocol::Version) | Some(Protocol::KV) | Some(Protocol::MRing) => match msg {
                             Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
-                            Some(WsMessage::Reply(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            Some(WsMessage::Reply(_, msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
                             None | Some(WsMessage::Raft(_)) => false,
                         }
                         Some(Protocol::URing) => match msg {
                             Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
                             Some(WsMessage::Raft(msg)) => self.tx.send(Message::Binary(encode_ws(msg).to_vec())).await.is_ok(),
-                            Some(WsMessage::Reply(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            Some(WsMessage::Reply(_, msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
                             None => false,
                         },
                     }

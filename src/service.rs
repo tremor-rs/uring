@@ -47,6 +47,6 @@ where
         node: &Mutex<RawNode<Storage>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>, Error>;
+    ) -> Result<(u16, Vec<u8>), Error>;
     fn is_local(&self, event: &[u8]) -> Result<bool, Error>;
 }

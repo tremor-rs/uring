@@ -93,8 +93,9 @@ pub enum SRequest {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Reply {
+    pub code: u16,
     pub rid: RequestId,
-    pub data: Option<serde_json::Value>,
+    pub data: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

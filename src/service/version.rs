@@ -56,11 +56,14 @@ where
         _node: &Mutex<RawNode<Storage>>,
         _pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>, Error> {
+    ) -> Result<(u16, Vec<u8>), Error> {
         match serde_json::from_slice(&event) {
             Ok(Event::Get) => {
                 debug!(self.logger, "GET",);
-                Ok(serde_json::to_vec(&serde_json::Value::String(VERSION.to_string())).ok())
+                Ok((
+                    200,
+                    serde_json::to_vec(&serde_json::Value::String(VERSION.to_string())).unwrap(),
+                ))
             }
             _ => Err(Error::UnknownEvent),
         }
@@ -102,10 +105,11 @@ mod test {
                 .execute(node.raft_group.as_ref().unwrap(), &mut node.pubsub, get)
                 .await
                 .ok()
-                .unwrap();
+                .unwrap()
+                .1;
             assert_eq!(
                 format!("\"{}\"", VERSION),
-                String::from_utf8(version.unwrap()).ok().unwrap()
+                String::from_utf8(version).ok().unwrap()
             );
         });
     }

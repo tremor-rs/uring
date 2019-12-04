@@ -180,7 +180,7 @@ async fn worker(
                     match msg {
                         Some(WsMessage::Raft(msg)) => {c.ws_stream.send(Message::Binary(encode_ws(msg).to_vec())).await.is_ok()},
                         Some(WsMessage::Ctrl(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()},
-                        Some(WsMessage::Reply(msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()},
+                        Some(WsMessage::Reply(_, msg)) => {c.ws_stream.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()},
                         None => false
                 },
                 msg = c.ws_stream.next().fuse() => {

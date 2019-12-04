@@ -55,13 +55,13 @@ where
         node: &Mutex<RawNode<S>>,
         _pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>, Error> {
+    ) -> Result<(u16, Vec<u8>), Error> {
         match serde_json::from_slice(&event) {
             Ok(Event::Get) => {
                 debug!(self.logger, "GET",);
                 let status = crate::raft_node::status(node).await.unwrap();
                 let val = serde_json::to_vec(&status).unwrap().clone();
-                Ok(Some(val))
+                Ok((200, val))
             }
             _ => Err(Error::UnknownEvent),
         }
@@ -107,7 +107,7 @@ mod test {
                         .await
                         .ok()
                         .unwrap()
-                        .unwrap(),
+                        .1,
                 )
                 .unwrap();
                 assert_eq!(status_response, status_check);

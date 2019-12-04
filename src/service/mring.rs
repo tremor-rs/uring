@@ -115,26 +115,31 @@ where
         node: &Mutex<RawNode<Storage>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>, Error> {
+    ) -> Result<(u16, Vec<u8>), Error> {
         let raft_node = node.try_lock().unwrap();
         let storage = raft_node.store();
         match serde_json::from_slice(&event) {
-            Ok(Event::GetSize) => Ok(self
-                .size(storage)
-                .await
-                .and_then(|size| serde_json::to_vec(&serde_json::Value::from(size)).ok())),
+            Ok(Event::GetSize) => Ok((
+                200u16,
+                self.size(storage)
+                    .await
+                    .and_then(|size| serde_json::to_vec(&serde_json::Value::from(size)).ok())
+                    .unwrap(),
+            )),
             Ok(Event::SetSize { size }) => {
-                let size = if let Some(size) = self.size(&*storage).await {
-                    size
-                } else {
-                    let mut data = vec![0; 8];
-                    {
-                        let mut data = Cursor::new(&mut data[..]);
-                        data.put_u64_be(size);
-                    }
-                    storage.put(mring::ID.0 as u16, RING_SIZE, &data);
-                    size
-                };
+                if let Some(size) = self.size(&*storage).await {
+                    return Ok((
+                        409,
+                        serde_json::to_vec(&serde_json::Value::from(size)).unwrap(),
+                    ));
+                }
+
+                let mut data = vec![0; 8];
+                {
+                    let mut data = Cursor::new(&mut data[..]);
+                    data.put_u64_be(size);
+                }
+                storage.put(mring::ID.0 as u16, RING_SIZE, &data);
 
                 pubsub
                     .send(pubsub::Msg::new(
@@ -147,14 +152,17 @@ where
                     .await
                     .unwrap();
 
-                Ok(serde_json::to_vec(&serde_json::Value::from(size)).ok())
+                Ok((
+                    200,
+                    serde_json::to_vec(&serde_json::Value::from(size)).unwrap(),
+                ))
             }
-            Ok(Event::GetNodes) => Ok(storage.get(mring::ID.0 as u16, NODES).await),
+            Ok(Event::GetNodes) => Ok((200, storage.get(mring::ID.0 as u16, NODES).await.unwrap())),
             Ok(Event::AddNode { node }) => {
                 let size = if let Some(size) = self.size(&*storage).await {
                     size
                 } else {
-                    return Ok(None);
+                    return Ok((412, serde_json::to_vec(&"mring size not set").unwrap()));
                 };
                 let next = if let Some(current) = self.nodes(&*storage).await {
                     let (next, relocations) = Placement::add_node(size, current, node.clone());
@@ -190,13 +198,13 @@ where
                 };
                 let next = serde_json::to_vec(&next).unwrap();
                 storage.put(mring::ID.0 as u16, NODES, &next);
-                Ok(Some(next))
+                Ok((200, next))
             }
             Ok(Event::RemoveNode { node }) => {
                 let size = if let Some(size) = self.size(&*storage).await {
                     size
                 } else {
-                    return Ok(None);
+                    return Ok((412, serde_json::to_vec(&"mring size not set").unwrap()));
                 };
 
                 if let Some(current) = self.nodes(&*storage).await {
@@ -215,9 +223,12 @@ where
                         .unwrap();
                     let next = serde_json::to_vec(&next).unwrap();
                     storage.put(mring::ID.0 as u16, NODES, &next);
-                    Ok(Some(next))
+                    Ok((200, next))
                 } else {
-                    Ok(None)
+                    return Ok((
+                        412,
+                        serde_json::to_vec(&"mring does not exist yet").unwrap(),
+                    ));
                 }
             }
             Err(_) => Err(Error::UnknownEvent),

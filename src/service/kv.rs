@@ -16,10 +16,10 @@ use super::*;
 use crate::{pubsub, storage, ServiceId};
 use async_std::sync::Mutex;
 use async_trait::async_trait;
+use futures::SinkExt;
 use raft::RawNode;
 use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
-use futures::SinkExt;
 
 pub const ID: ServiceId = ServiceId(0);
 
@@ -112,7 +112,7 @@ where
         node: &Mutex<RawNode<Storage>>,
         pubsub: &mut pubsub::Channel,
         event: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>, Error> {
+    ) -> Result<(u16, Vec<u8>), Error> {
         let raft_node = node.try_lock().unwrap();
         let storage = raft_node.store();
         match serde_json::from_slice(&event) {
@@ -122,11 +122,15 @@ where
                     "READ {:?}",
                     String::from_utf8(key.clone()).ok()
                 );
-                Ok(storage
-                    .get(self.scope, &key)
-                    .await
-                    .and_then(|v| String::from_utf8(v).ok())
-                    .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
+                Ok((
+                    200u16,
+                    storage
+                        .get(self.scope, &key)
+                        .await
+                        .and_then(|v| String::from_utf8(v).ok())
+                        .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())
+                        .unwrap(),
+                ))
             }
             Ok(Event::Put { key, value }) => {
                 debug!(
@@ -154,7 +158,11 @@ where
                     })
                     .await
                     .unwrap();
-                Ok(old.and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok()))
+                Ok((
+                    201,
+                    old.and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())
+                        .unwrap(),
+                ))
             }
             Ok(Event::Cas {
                 key,
@@ -186,11 +194,12 @@ where
                         .await
                         .unwrap();
                     if let Some(conflict) = conflict {
-                        Ok(Some(
+                        Ok((
+                            409,
                             serde_json::to_vec(&serde_json::Value::String(conflict)).unwrap(),
                         ))
                     } else {
-                        Ok(Some(serde_json::to_vec(&serde_json::Value::Null).unwrap()))
+                        Ok((409, serde_json::to_vec(&serde_json::Value::Null).unwrap()))
                     }
                 } else {
                     let old = check_value.and_then(|c| String::from_utf8(c).ok());
@@ -209,14 +218,18 @@ where
                         })
                         .await
                         .unwrap();
-                    Ok(None)
+                    Ok((201, serde_json::to_vec(&"set").unwrap()))
                 }
             }
-            Ok(Event::Delete { key }) => Ok(storage
-                .delete(self.scope, &key)
-                .await
-                .and_then(|v| String::from_utf8(v).ok())
-                .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())),
+            Ok(Event::Delete { key }) => Ok((
+                200,
+                storage
+                    .delete(self.scope, &key)
+                    .await
+                    .and_then(|v| String::from_utf8(v).ok())
+                    .and_then(|s| serde_json::to_vec(&serde_json::Value::String(s)).ok())
+                    .unwrap(),
+            )),
             _ => Err(Error::UnknownEvent),
         }
     }

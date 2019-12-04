@@ -17,7 +17,7 @@ pub mod ws;
 use crate::network::ws::WsMessage;
 use crate::*;
 use async_trait::async_trait;
-use futures::channel::mpsc::{TryRecvError, Sender};
+use futures::channel::mpsc::{Sender, TryRecvError};
 use raft::eraftpb::Message as RaftMessage;
 use std::{fmt, io};
 
@@ -62,7 +62,7 @@ pub trait Network: Send + Sync {
         pid: ProposalId,
         success: bool,
     ) -> Result<(), Error>;
-    async fn event_reply(&mut self, id: EventId, reply: Option<Vec<u8>>) -> Result<(), Error>;
+    async fn event_reply(&mut self, id: EventId, code: u16, reply: Vec<u8>) -> Result<(), Error>;
     async fn send_msg(&mut self, msg: RaftMessage) -> Result<(), Error>;
     fn connections(&self) -> Vec<NodeId>;
     async fn forward_proposal(
@@ -95,7 +95,8 @@ impl Network for NullNetwork {
     async fn event_reply(
         &mut self,
         _id: EventId,
-        _reply: Option<Vec<u8>>,
+        _code: u16,
+        _reply: Vec<u8>,
     ) -> Result<(), network::Error> {
         unimplemented!()
     }

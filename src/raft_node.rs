@@ -17,6 +17,7 @@ use crate::network::ws::WsMessage;
 use crate::storage::*;
 use crate::version::VERSION;
 use async_std::sync::Mutex;
+use futures::SinkExt;
 use protobuf::Message as PBMessage;
 use raft::eraftpb::ConfState;
 use raft::eraftpb::Message;
@@ -26,7 +27,6 @@ use slog::Logger;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
-use futures::SinkExt;
 
 fn example_config() -> Config {
     Config {
@@ -152,30 +152,30 @@ where
                     match msg {
                         RaftNetworkMsg::Status(rid, mut reply) => {
                             info!(self.logger, "Getting node status");
-                            reply.send(WsMessage::Reply(ws_proto::Reply { rid, data: serde_json::to_value(status(raft).await.unwrap()).ok() })).await.unwrap();
+                            reply.send(WsMessage::Reply(200, ws_proto::Reply { code: 200, rid, data: serde_json::to_value(status(raft).await.unwrap()).unwrap() })).await.unwrap();
                         }
                         RaftNetworkMsg::Version(rid, mut reply) => {
                             info!(self.logger, "Getting version");
-                            reply.send(WsMessage::Reply(ws_proto::Reply { rid, data: serde_json::to_value(self.version()).ok() })).await.unwrap();
+                            reply.send(WsMessage::Reply(200, ws_proto::Reply { code: 200, rid, data: serde_json::to_value(self.version()).unwrap() })).await.unwrap();
                         }
                         RaftNetworkMsg::Event(eid, sid, data) => {
                             if let Some(mut service) = self.services.get_mut(&sid) {
                                 if service.is_local(&data).unwrap() {
-                                    let value = service.execute(raft, &mut self.pubsub, data).await.unwrap();
-                                    self.network.event_reply(eid, value).await.unwrap();
+                                    let (code, value) = service.execute(raft, &mut self.pubsub, data).await.unwrap();
+                                    self.network.event_reply(eid, code, value).await.unwrap();
                                 } else {
                                     let pid = self.next_pid();
                                     let from = self.id;
                                     if let Err(e) = self.propose_event(from, pid, sid, eid, data).await {
                                         error!(self.logger, "Post forward error: {}", e);
-                                        self.network.event_reply(eid, None).await.unwrap();
+                                        self.network.event_reply(eid, 500, serde_json::to_vec(&format!("{}", e)).unwrap()).await.unwrap();
                                     } else {
                                         self.pending_acks.insert(pid, eid);
                                     }
                                 }
                             } else {
                                 error!(self.logger, "Unknown Service: {}", sid);
-                                self.network.event_reply(eid, None).await.unwrap();
+                                self.network.event_reply(eid, 500, serde_json::to_vec(&format!("Service {} not known", sid)).unwrap()).await.unwrap();
                             }
                         }
                         RaftNetworkMsg::GetNode(id, mut reply) => {
@@ -318,14 +318,19 @@ where
         self.proposal_id += 1;
         ProposalId(pid)
     }
-    
+
     pub fn version(&self) -> String {
         VERSION.to_string()
     }
 
     pub async fn node_known(&self, id: NodeId) -> bool {
         if let Some(ref g) = self.raft_group {
-            g.try_lock().unwrap().raft.prs().configuration().contains(id.0)
+            g.try_lock()
+                .unwrap()
+                .raft
+                .prs()
+                .configuration()
+                .contains(id.0)
         } else {
             false
         }
@@ -501,12 +506,25 @@ where
             return Ok(());
         };
 
-        if !self.raft_group.as_ref().unwrap().try_lock().unwrap().has_ready() {
+        if !self
+            .raft_group
+            .as_ref()
+            .unwrap()
+            .try_lock()
+            .unwrap()
+            .has_ready()
+        {
             return Ok(());
         }
 
         // Get the `Ready` with `RawNode::ready` interface.
-        let mut ready = self.raft_group.as_mut().unwrap().try_lock().unwrap().ready();
+        let mut ready = self
+            .raft_group
+            .as_mut()
+            .unwrap()
+            .try_lock()
+            .unwrap()
+            .ready();
 
         // Persistent raft logs. It's necessary because in `RawNode::advance` we stabilize
         // raft logs to the latest position.
@@ -565,7 +583,7 @@ where
                             //     .raft
                             //     .raft_log
                             //     .store;
-                            let value = service
+                            let (code, value) = service
                                 .execute(
                                     self.raft_group.as_ref().unwrap(),
                                     &mut self.pubsub,
@@ -574,12 +592,24 @@ where
                                 .await
                                 .unwrap();
                             if event.nid == Some(self.id) {
-                                self.network.event_reply(event.eid, value).await.unwrap();
+                                self.network
+                                    .event_reply(event.eid, code, value)
+                                    .await
+                                    .unwrap();
                             }
                         }
                     }
                 }
-                if self.raft_group.as_ref().unwrap().try_lock().unwrap().raft.state == StateRole::Leader {
+                if self
+                    .raft_group
+                    .as_ref()
+                    .unwrap()
+                    .try_lock()
+                    .unwrap()
+                    .raft
+                    .state
+                    == StateRole::Leader
+                {
                     // The leader should response to the clients, tell them if their proposals
                     // succeeded or not.
                     if let Some(proposal) = self.proposals.pop_front() {
@@ -621,7 +651,7 @@ where
         let mut pending = Vec::new();
         for p in self.proposals.iter_mut().skip_while(|p| p.proposed > 0) {
             if propose_and_check_failed_proposal(&mut *raft_group, p)? {
-            // if propose_and_check_failed_proposal(&mut *raft_group.lock().await, p)? {
+                // if propose_and_check_failed_proposal(&mut *raft_group.lock().await, p)? {
                 if p.proposer == self.id {
                     if let Some(prop) = self.pending_proposals.remove(&p.id) {
                         pending.push(prop);

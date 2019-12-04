@@ -57,10 +57,7 @@ pub struct Network {
     pending: HashMap<EventId, Reply>,
 }
 
-pub(crate) enum Reply {
-    Direct(Sender<Option<Vec<u8>>>),
-    WS(RequestId, Sender<WsMessage>),
-}
+pub(crate) struct Reply(RequestId, Sender<WsMessage>);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum CtrlMsg {
@@ -103,19 +100,15 @@ pub(crate) enum UrMsg {
 
 #[async_trait]
 impl NetworkTrait for Network {
-    async fn event_reply(&mut self, id: EventId, data: Option<Vec<u8>>) -> Result<(), Error> {
+    async fn event_reply(&mut self, id: EventId, code: u16, data: Vec<u8>) -> Result<(), Error> {
         match self.pending.remove(&id) {
-            Some(Reply::WS(rid, mut sender)) => sender
-                .send(
-                    ProtoReply {
-                        rid,
-                        data: data.and_then(|d| serde_json::from_slice(&d).ok()),
-                    }
-                    .into(),
-                )
-                .await
-                .unwrap(),
-            Some(Reply::Direct(mut sender)) => sender.send(data).await.unwrap(),
+            Some(Reply(rid, mut sender)) => {
+                let data: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                sender
+                    .send(ProtoReply { code, rid, data }.into())
+                    .await
+                    .unwrap()
+            }
             None => error!(self.logger, "Uknown event id {} for reply: {:?}", id, data),
         };
         Ok(())
@@ -359,7 +352,7 @@ impl NetworkTrait for Network {
 pub enum WsMessage {
     Ctrl(CtrlMsg),
     Raft(RaftMessage),
-    Reply(ws_proto::Reply),
+    Reply(u16, ws_proto::Reply),
 }
 
 impl From<CtrlMsg> for WsMessage {
@@ -376,7 +369,7 @@ impl From<RaftMessage> for WsMessage {
 
 impl From<ws_proto::Reply> for WsMessage {
     fn from(m: ws_proto::Reply) -> Self {
-        Self::Reply(m)
+        Self::Reply(m.code, m)
     }
 }
 
