@@ -17,7 +17,6 @@ use crate::network::ws::WsMessage;
 use crate::storage::*;
 use crate::version::VERSION;
 use async_std::sync::Mutex;
-use async_std::task::block_on;
 use protobuf::Message as PBMessage;
 use raft::eraftpb::ConfState;
 use raft::eraftpb::Message;
@@ -123,8 +122,6 @@ connections: {:?}
         } else {
             write!(f, "UNINITIALIZED")
         }
-
-        Ok(())
     }
 }
 
@@ -164,7 +161,6 @@ where
                         RaftNetworkMsg::Event(eid, sid, data) => {
                             if let Some(mut service) = self.services.get_mut(&sid) {
                                 if service.is_local(&data).unwrap() {
-                                    let store = &self.raft_group.as_ref().unwrap().lock().await.raft.raft_log.store;
                                     let value = service.execute(raft, &mut self.pubsub, data).await.unwrap();
                                     self.network.event_reply(eid, value).await.unwrap();
                                 } else {

@@ -15,7 +15,7 @@
 use super::*;
 use async_std::net::TcpStream;
 use futures::channel::mpsc::{channel, Receiver, Sender};
-use futures::{select, FutureExt, StreamExt};
+use futures::{select, FutureExt, StreamExt, SinkExt};
 use slog::Logger;
 use std::collections::HashMap;
 use std::time::Duration;
