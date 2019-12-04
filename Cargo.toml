@@ -7,7 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
-members = ["ws-proto", "uring-common", "mring-node"]
+members = ["ws-proto", "uring-common", "mring-node", "limiter"]
 
 [dependencies]
 
@@ -43,7 +43,7 @@ futures = "0.3"
 async-trait = "0.1"
 
 http-service-hyper = "0.3.1"
-tide = "0.3"
+tide = "0.4"
 http = "0.1"
 
 [dependencies.tungstenite]

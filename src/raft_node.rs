@@ -137,6 +137,9 @@ where
     pub fn add_service(&mut self, sid: ServiceId, service: Box<dyn Service<Storage>>) {
         self.services.insert(sid, service);
     }
+    pub fn pubsub(&mut self) -> &mut pubsub::Channel {
+        &mut self.pubsub
+    }
     pub async fn node_loop(&mut self) -> Result<()> {
         let mut ticks = async_std::stream::interval(self.tick_duration);
         let mut i = Instant::now();
