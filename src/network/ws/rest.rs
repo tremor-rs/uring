@@ -1,4 +1,4 @@
-// Copyright 2018-2019, Wayfair GmbH
+// Copyright 2018-2020, Wayfair GmbH
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,12 +18,47 @@ mod mring;
 use super::Node;
 use super::*;
 use crate::NodeId;
-use futures::channel::mpsc::{channel, Receiver};
+use futures::channel::mpsc::{channel, Receiver, TrySendError};
 use http::StatusCode;
 use serde::Serialize;
 use tide::{IntoResponse, Request, Response, ResultExt};
 
-type Result<T> = std::result::Result<T, tide::Error>;
+
+#[derive(Debug)]
+pub enum Error {
+    HTTP(StatusCode),
+    Tide(tide::Error),
+    JSON(serde_json::Error),
+    SendError
+}
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        match self {
+            Self::HTTP(code) => response_json(code.as_u16(), code.canonical_reason()).unwrap(),
+            Self::SendError => response_json(505, "Internal communication to raft core failed").unwrap(),
+            Self::JSON(e) => response_json(400, format!("Invalid JSON: {}", e)).unwrap(),
+            Self::Tide(e) => e.into_response()
+        }
+    }
+}
+
+impl From<StatusCode> for Error {
+    fn from(s: StatusCode) -> Self { Self::HTTP(s) }    
+}
+impl From<tide::Error> for Error {
+    fn from(s: tide::Error) -> Self { Self::Tide(s) }    
+}
+impl From<serde_json::Error> for Error {
+    fn from(s: serde_json::Error) -> Self { Self::JSON(s) }    
+}
+
+impl<T> From<TrySendError<T>> for Error {
+    fn from(_s: TrySendError<T>) -> Self { Self::SendError }
+    
+}
+
+
+type Result<T> = std::result::Result<T, Error>;
 
 fn unerror(r: Result<Response>) -> Response {
     match r {
@@ -37,21 +72,21 @@ fn reply(tx: Sender<WsMessage>) -> Reply {
 }
 
 async fn request(cx: Request<Node>, req: UrMsg, mut rx: Receiver<WsMessage>) -> Result<Response> {
-    cx.state().tx.unbounded_send(req).unwrap();
+    cx.state().tx.unbounded_send(req)?;
     rx.next()
         .await
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR.into())
-        .map(|msg| match msg {
+        .and_then(|msg| match msg {
             WsMessage::Reply(code, r) => response_json(code, r.data),
             _ => unreachable!(),
         })
 }
 
-fn response_json<S: Serialize>(c: u16, v: S) -> Response {
-    Response::new(c).body_json(&v).unwrap()
+fn response_json<S: Serialize>(c: u16, v: S) -> Result<Response> {
+    Ok(Response::new(c).body_json(&v)?)
 }
 
-fn response_json_200<S: Serialize>(v: S) -> Response {
+fn response_json_200<S: Serialize>(v: S) -> Result<Response> {
     response_json(200, v)
 }
 
@@ -70,13 +105,12 @@ async fn uring_get(cx: Request<Node>) -> Result<Response> {
     let id: u64 = cx.param("id").client_err()?;
     cx.state()
         .tx
-        .unbounded_send(UrMsg::GetNode(NodeId(id), tx))
-        .unwrap();
+        .unbounded_send(UrMsg::GetNode(NodeId(id), tx))?;
 
     rx.next()
         .await
         .ok_or(StatusCode::NOT_FOUND.into())
-        .map(response_json_200)
+        .and_then(response_json_200)
 }
 
 async fn uring_post(cx: Request<Node>) -> Result<Response> {
@@ -84,12 +118,11 @@ async fn uring_post(cx: Request<Node>) -> Result<Response> {
     let id: u64 = cx.param("id").client_err()?;
     cx.state()
         .tx
-        .unbounded_send(UrMsg::AddNode(NodeId(id), tx))
-        .unwrap();
+        .unbounded_send(UrMsg::AddNode(NodeId(id), tx))?;
     rx.next()
         .await
         .ok_or(StatusCode::NOT_FOUND.into())
-        .map(response_json_200)
+        .and_then(response_json_200)
 }
 
 pub(crate) async fn run(logger: Logger, node: Node, addr: String) -> std::io::Result<()> {

@@ -1,4 +1,4 @@
-#  Copyright 2018-2019, Wayfair GmbH
+#  Copyright 2018-2020, Wayfair GmbH
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ count=0
 
 for file in $(find . -name '*.rs' | grep -v '/target')
 do
-    if ! grep 'Copyright 2018-2019, Wayfair GmbH' "$file" > /dev/null
+    if ! grep 'Copyright 2018-2020, Wayfair GmbH' "$file" > /dev/null
     then
         echo "##[error] Copyright missing in $file"
         count=$((count + 1))
