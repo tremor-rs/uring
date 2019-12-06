@@ -1,0 +1,12 @@
+[package]
+name = "gdrl"
+version = "0.1.0"
+authors = ["The Tremor Team"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+async-std = "1.2"

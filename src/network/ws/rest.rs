@@ -23,40 +23,47 @@ use http::StatusCode;
 use serde::Serialize;
 use tide::{IntoResponse, Request, Response, ResultExt};
 
-
 #[derive(Debug)]
 pub enum Error {
     HTTP(StatusCode),
     Tide(tide::Error),
     JSON(serde_json::Error),
-    SendError
+    SendError,
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
             Self::HTTP(code) => response_json(code.as_u16(), code.canonical_reason()).unwrap(),
-            Self::SendError => response_json(505, "Internal communication to raft core failed").unwrap(),
+            Self::SendError => {
+                response_json(505, "Internal communication to raft core failed").unwrap()
+            }
             Self::JSON(e) => response_json(400, format!("Invalid JSON: {}", e)).unwrap(),
-            Self::Tide(e) => e.into_response()
+            Self::Tide(e) => e.into_response(),
         }
     }
 }
 
 impl From<StatusCode> for Error {
-    fn from(s: StatusCode) -> Self { Self::HTTP(s) }    
+    fn from(s: StatusCode) -> Self {
+        Self::HTTP(s)
+    }
 }
 impl From<tide::Error> for Error {
-    fn from(s: tide::Error) -> Self { Self::Tide(s) }    
+    fn from(s: tide::Error) -> Self {
+        Self::Tide(s)
+    }
 }
 impl From<serde_json::Error> for Error {
-    fn from(s: serde_json::Error) -> Self { Self::JSON(s) }    
+    fn from(s: serde_json::Error) -> Self {
+        Self::JSON(s)
+    }
 }
 
 impl<T> From<TrySendError<T>> for Error {
-    fn from(_s: TrySendError<T>) -> Self { Self::SendError }
-    
+    fn from(_s: TrySendError<T>) -> Self {
+        Self::SendError
+    }
 }
-
 
 type Result<T> = std::result::Result<T, Error>;
 
