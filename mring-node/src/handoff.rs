@@ -13,15 +13,20 @@
 // limitations under the License.
 
 use crate::vnode;
+use async_std::net::SocketAddr;
 use async_std::net::ToSocketAddrs;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
-use futures::channel::mpsc::{channel, Sender, Receiver};
+use async_tungstenite::connect_async;
+use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::{SinkExt, StreamExt};
+use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use tungstenite::protocol::Message as TungstenMessage;
-use serde_derive::{Deserialize, Serialize};
-use async_std::net::SocketAddr;
+
+type WSStream = async_tungstenite::WebSocketStream<
+    async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
+>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum Direction {
@@ -34,7 +39,6 @@ pub(crate) struct Handoff {
     pub chunk: u64,
     pub direction: Direction,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum Message {
@@ -194,4 +198,177 @@ pub(crate) async fn listener(
     }
 
     Ok(())
+}
+
+pub(crate) struct Worker {
+    logger: Logger,
+    src: String,
+    target: String,
+    vnode: u64,
+    cnc: Sender<vnode::Cmd>,
+    ws_stream: WSStream,
+    chunk: u64,
+}
+
+pub(crate) enum Error {
+    ConnectionFailed,
+    Canceld,
+}
+
+impl Worker {
+    pub async fn new(
+        logger: Logger,
+        src: String,
+        target: String,
+        vnode: u64,
+        mut cnc: Sender<vnode::Cmd>,
+    ) -> Result<Self, Error> {
+        let url = url::Url::parse(&format!("ws://{}", target)).unwrap();
+        if let Ok((ws_stream, _)) = connect_async(url).await {
+            Ok(Self {
+                logger,
+                target,
+                vnode,
+                cnc,
+                ws_stream,
+                chunk: 0,
+                src,
+            })
+        } else {
+            error!(
+                logger,
+                "Failed to connect to {} to transfair vnode {}", target, vnode
+            );
+            cnc.send(vnode::Cmd::CancelHandoff { vnode, target })
+                .await
+                .unwrap();
+            Err(Error::ConnectionFailed)
+        }
+    }
+
+    pub async fn handoff(mut self) -> Result<(), Error> {
+        info!(self.logger, "Starting handoff for vnode {}", self.vnode);
+        self.init().await?;
+        while self.transfair_data().await? {}
+        self.finish().await
+    }
+
+    async fn finish(&mut self) -> Result<(), Error> {
+        let vnode = self.vnode;
+        self.try_ack(Message::Finish { vnode }, Ack::Finish { vnode })
+            .await?;
+        self.cnc
+            .send(vnode::Cmd::FinishHandoff { vnode })
+            .await
+            .unwrap();
+        Ok(())
+    }
+
+    async fn init(&mut self) -> Result<(), Error> {
+        let vnode = self.vnode;
+        self.try_ack(
+            Message::Start {
+                src: self.src.clone(),
+                vnode,
+            },
+            Ack::Start { vnode },
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn transfair_data(&mut self) -> Result<bool, Error> {
+        let vnode = self.vnode;
+        let chunk = self.chunk;
+        info!(
+            self.logger,
+            "requesting chunk {} from vnode {}", chunk, vnode
+        );
+        let (tx, mut rx) = channel(crate::CHANNEL_SIZE);
+        if self
+            .cnc
+            .send(vnode::Cmd::GetHandoffData {
+                vnode,
+                chunk,
+                reply: tx.clone(),
+            })
+            .await
+            .is_err()
+        {
+            return self.cancel().await;
+        };
+
+        if let Some((r_chunk, data)) = rx.next().await {
+            assert_eq!(chunk, r_chunk);
+            if data.is_empty() {
+                info!(self.logger, "transfer for vnode {} finished", vnode);
+                return Ok(false);
+            }
+            info!(
+                self.logger,
+                "transfering chunk {} from vnode {}", chunk, vnode
+            );
+
+            self.try_ack(Message::Data { vnode, chunk, data }, Ack::Data { chunk })
+                .await?;
+            self.chunk += 1;
+            Ok(true)
+        } else {
+            error!(
+                self.logger,
+                "error tranfairing chunk {} for vnode {}", chunk, vnode
+            );
+            self.cancel().await
+        }
+    }
+
+    async fn try_ack(&mut self, msg: Message, ack: Ack) -> Result<(), Error> {
+        if self
+            .ws_stream
+            .send(TungstenMessage::text(serde_json::to_string(&msg).unwrap()))
+            .await
+            .is_err()
+        {
+            error!(
+                self.logger,
+                "Failed to send handoff command {:?} for vnode {} to {}",
+                msg,
+                self.vnode,
+                self.target
+            );
+            return self.cancel().await;
+        };
+
+        if let Some(Ok(data)) = self.ws_stream.next().await {
+            let r: Ack = serde_json::from_slice(&data.into_data()).unwrap();
+            if ack != r {
+                error!(self.logger, "Bad reply for  handoff command {:?} for vnode {} to {}. Expected, {:?}, but gut {:?}", msg, self.vnode, self.target, ack, r);
+                return self.cancel().await;
+            }
+        } else {
+            error!(
+                self.logger,
+                "No reply for  handoff command {:?} for vnode {} to {}",
+                msg,
+                self.vnode,
+                self.target
+            );
+            return self.cancel().await;
+        }
+        Ok(())
+    }
+
+    async fn cancel<T>(&mut self) -> Result<T, Error>
+    where
+        T: Default,
+    {
+        self.cnc
+            .send(vnode::Cmd::CancelHandoff {
+                vnode: self.vnode,
+                target: self.target.clone(),
+            })
+            .await
+            .unwrap();
+        Err(Error::Canceld)
+    }
 }

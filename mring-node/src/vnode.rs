@@ -14,20 +14,15 @@
 
 use crate::handoff;
 use async_std::net::TcpStream;
+use async_std::task;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::{select, FutureExt, SinkExt, StreamExt};
+use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
 use std::time::Duration;
 use tungstenite::protocol::Message as TungstenMessage;
 use uring_common::MRingNodes;
-use async_tungstenite::connect_async;
-use serde_derive::{Serialize, Deserialize};
-use async_std::task;
-
-type WSStream = async_tungstenite::WebSocketStream<
-    async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
->;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 struct VNode {
@@ -61,180 +56,7 @@ pub(crate) enum Task {
     },
 }
 
-struct HandoffWorker {
-    logger: Logger,
-    src: String,
-    target: String,
-    vnode: u64,
-    cnc: Sender<Cmd>,
-    ws_stream: WSStream,
-    chunk: u64,
-}
-
-enum HandoffError {
-    ConnectionFailed,
-    Canceld,
-}
-
-impl HandoffWorker {
-    pub async fn new(
-        logger: Logger,
-        src: String,
-        target: String,
-        vnode: u64,
-        mut cnc: Sender<Cmd>,
-    ) -> Result<Self, HandoffError> {
-        let url = url::Url::parse(&format!("ws://{}", target)).unwrap();
-        if let Ok((ws_stream, _)) = connect_async(url).await {
-            Ok(Self {
-                logger,
-                target,
-                vnode,
-                cnc,
-                ws_stream,
-                chunk: 0,
-                src,
-            })
-        } else {
-            error!(
-                logger,
-                "Failed to connect to {} to transfair vnode {}", target, vnode
-            );
-            cnc.send(Cmd::CancelHandoff { vnode, target })
-                .await
-                .unwrap();
-            Err(HandoffError::ConnectionFailed)
-        }
-    }
-
-    pub async fn handoff(mut self) -> Result<(), HandoffError> {
-        info!(self.logger, "Starting handoff for vnode {}", self.vnode);
-        self.init().await?;
-        while self.transfair_data().await? {}
-        self.finish().await
-    }
-
-    async fn finish(&mut self) -> Result<(), HandoffError> {
-        let vnode = self.vnode;
-        self.try_ack(handoff::Message::Finish { vnode }, handoff::Ack::Finish { vnode })
-            .await?;
-        self.cnc.send(Cmd::FinishHandoff { vnode }).await.unwrap();
-        Ok(())
-    }
-
-    async fn init(&mut self) -> Result<(), HandoffError> {
-        let vnode = self.vnode;
-        self.try_ack(
-            handoff::Message::Start {
-                src: self.src.clone(),
-                vnode,
-            },
-            handoff::Ack::Start { vnode },
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn transfair_data(&mut self) -> Result<bool, HandoffError> {
-        let vnode = self.vnode;
-        let chunk = self.chunk;
-        info!(
-            self.logger,
-            "requesting chunk {} from vnode {}", chunk, vnode
-        );
-        let (tx, mut rx) = channel(crate::CHANNEL_SIZE);
-        if self
-            .cnc
-            .send(Cmd::GetHandoffData {
-                vnode,
-                chunk,
-                reply: tx.clone(),
-            })
-            .await
-            .is_err()
-        {
-            return self.cancel().await;
-        };
-
-        if let Some((r_chunk, data)) = rx.next().await {
-            assert_eq!(chunk, r_chunk);
-            if data.is_empty() {
-                info!(self.logger, "transfer for vnode {} finished", vnode);
-                return Ok(false);
-            }
-            info!(
-                self.logger,
-                "transfering chunk {} from vnode {}", chunk, vnode
-            );
-
-            self.try_ack(
-                handoff::Message::Data { vnode, chunk, data },
-                handoff::Ack::Data { chunk },
-            )
-            .await?;
-            self.chunk += 1;
-            Ok(true)
-        } else {
-            error!(
-                self.logger,
-                "error tranfairing chunk {} for vnode {}", chunk, vnode
-            );
-            self.cancel().await
-        }
-    }
-
-    async fn try_ack(&mut self, msg: handoff::Message, ack: handoff::Ack) -> Result<(), HandoffError> {
-        if self
-            .ws_stream
-            .send(TungstenMessage::text(serde_json::to_string(&msg).unwrap()))
-            .await
-            .is_err()
-        {
-            error!(
-                self.logger,
-                "Failed to send handoff command {:?} for vnode {} to {}",
-                msg,
-                self.vnode,
-                self.target
-            );
-            return self.cancel().await;
-        };
-
-        if let Some(Ok(data)) = self.ws_stream.next().await {
-            let r: handoff::Ack = serde_json::from_slice(&data.into_data()).unwrap();
-            if ack != r {
-                error!(self.logger, "Bad reply for  handoff command {:?} for vnode {} to {}. Expected, {:?}, but gut {:?}", msg, self.vnode, self.target, ack, r);
-                return self.cancel().await;
-            }
-        } else {
-            error!(
-                self.logger,
-                "No reply for  handoff command {:?} for vnode {} to {}",
-                msg,
-                self.vnode,
-                self.target
-            );
-            return self.cancel().await;
-        }
-        Ok(())
-    }
-
-    async fn cancel<T>(&mut self) -> Result<T, HandoffError>
-    where
-        T: Default,
-    {
-        self.cnc
-            .send(Cmd::CancelHandoff {
-                vnode: self.vnode,
-                target: self.target.clone(),
-            })
-            .await
-            .unwrap();
-        Err(HandoffError::Canceld)
-    }
-}
-
-enum Cmd {
+pub(crate) enum Cmd {
     GetHandoffData {
         vnode: u64,
         chunk: u64,
@@ -345,7 +167,7 @@ async fn handle_tick(
                             direction: handoff::Direction::Outbound
 
                         });
-                        if let Ok(worker) = HandoffWorker::new(logger.clone(), id.to_string(), target, vnode.id, cnc_tx.clone()).await {
+                        if let Ok(worker) = handoff::Worker::new(logger.clone(), id.to_string(), target, vnode.id, cnc_tx.clone()).await {
                             task::spawn(worker.handoff());
                     }
                 }
