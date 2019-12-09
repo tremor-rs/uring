@@ -29,6 +29,7 @@ use serde_derive::{Deserialize, Serialize};
 use slog::Drain;
 use std::env;
 use tungstenite::protocol::Message;
+use uring_common::MRingNodes;
 
 const CHANNEL_SIZE: usize = 64usize;
 
@@ -46,7 +47,7 @@ struct Handoff {
     chunk: u64,
     direction: Direction,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 struct VNode {
     id: u64,
     handoff: Option<Handoff>,
@@ -60,6 +61,9 @@ enum Task {
     },
     Assign {
         vnodes: Vec<u64>,
+    },
+    Update {
+        next: MRingNodes,
     },
     HandoffInStart {
         src: String,

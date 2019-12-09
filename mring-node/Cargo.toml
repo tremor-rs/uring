@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 
 ws-proto = { path = "../ws-proto" }
+gdrl = { path = "../gdrl" }
 uring-common = { path = "../uring-common" }
 slog = { version = "2", features = ["max_level_info", "release_max_level_warn"] }
 

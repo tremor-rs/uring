@@ -13,6 +13,7 @@ members = ["ws-proto", "uring-common", "mring-node", "gdrl"]
 
 ws-proto = {path = "ws-proto"}
 uring-common = {path = "uring-common"}
+gdrl = {path = "gdrl"}
 
 raft = "0.6.0-alpha"
 rocksdb = "0.13"

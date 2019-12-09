@@ -20,6 +20,7 @@ use slog::Logger;
 use std::collections::HashMap;
 use std::time::Duration;
 use tungstenite::protocol::Message;
+use uring_common::MRingNodes;
 
 type WSStream = async_tungstenite::WebSocketStream<
     async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
@@ -213,10 +214,26 @@ enum Cmd {
     },
 }
 
+#[derive(Default)]
+struct State {
+    vnodes: HashMap<u64, VNode>,
+    mappings: HashMap<u64, String>,
+}
+
+impl State {
+    pub fn update_ring(&mut self, mapping: MRingNodes) {
+        for node in mapping.into_iter() {
+            for vnode in &node.vnodes {
+                &self.mappings.insert(*vnode, node.id.clone());
+            }
+        }
+    }
+}
+
 async fn handle_cmd(
     logger: &Logger,
     cmd: Option<Cmd>,
-    vnodes: &mut HashMap<u64, VNode>,
+    state: &mut State,
     tasks_tx: &mut Sender<Task>,
 ) {
     match cmd {
@@ -225,7 +242,7 @@ async fn handle_cmd(
             chunk,
             mut reply,
         }) => {
-            if let Some(vnode) = vnodes.get_mut(&vnode) {
+            if let Some(vnode) = state.vnodes.get_mut(&vnode) {
                 if let Some(ref mut handoff) = vnode.handoff {
                     assert_eq!(chunk, handoff.chunk);
                     assert_eq!(handoff.direction, Direction::Outbound);
@@ -243,7 +260,7 @@ async fn handle_cmd(
             }
         }
         Some(Cmd::CancelHandoff { vnode, target }) => {
-            if let Some(node) = vnodes.get_mut(&vnode) {
+            if let Some(node) = state.vnodes.get_mut(&vnode) {
                 assert!(node.handoff.is_some());
                 node.handoff = None;
                 warn!(
@@ -259,7 +276,7 @@ async fn handle_cmd(
             }
         }
         Some(Cmd::FinishHandoff { vnode }) => {
-            let v = vnodes.remove(&vnode).unwrap();
+            let v = state.vnodes.remove(&vnode).unwrap();
             let m = v.handoff.unwrap();
             assert_eq!(m.direction, Direction::Outbound);
         }
@@ -270,15 +287,18 @@ async fn handle_cmd(
 async fn handle_tick(
     logger: &Logger,
     id: &str,
-    vnodes: &mut HashMap<u64, VNode>,
+    state: &mut State,
     tasks: &mut Receiver<Task>,
     cnc_tx: &Sender<Cmd>,
 ) -> bool {
     select! {
         task = tasks.next() =>
         match task {
+            Some(Task::Update{next}) => {
+                state.update_ring(next);
+            }
             Some(Task::HandoffOut { target, vnode }) => {
-                if let Some(vnode) = vnodes.get_mut(&vnode){
+                if let Some(vnode) = state.vnodes.get_mut(&vnode){
                     info!(
                         logger,
                         "relocating vnode {} to node {}", vnode.id, target
@@ -296,15 +316,15 @@ async fn handle_tick(
                 }
             },
             Some(Task::HandoffInStart { vnode, src }) => {
-                vnodes.remove(&vnode);
-                vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(Handoff{partner: src, chunk: 0, direction: Direction::Inbound})});
+                state.vnodes.remove(&vnode);
+                state.vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(Handoff{partner: src, chunk: 0, direction: Direction::Inbound})});
             }
             Some(Task::HandoffIn { mut data, vnode, chunk }) => {
                 info!(
                     logger,
                     "accepting vnode {} with: {:?}", vnode, data
                 );
-                if let Some(node) = vnodes.get_mut(&vnode) {
+                if let Some(node) = state.vnodes.get_mut(&vnode) {
                     if let Some(ref mut handoff) = &mut node.handoff {
                         assert_eq!(handoff.chunk, chunk);
                         assert_eq!(handoff.direction, Direction::Inbound);
@@ -319,7 +339,7 @@ async fn handle_tick(
                 }
             },
             Some(Task::HandoffInEnd { vnode }) => {
-                if let Some(node) = vnodes.get_mut(&vnode) {
+                if let Some(node) = state.vnodes.get_mut(&vnode) {
                     if let Some(ref mut handoff) = &mut node.handoff {
                         assert_eq!(handoff.direction, Direction::Inbound);
                     } else {
@@ -335,7 +355,7 @@ async fn handle_tick(
                 info!(logger, "Initializing with {:?}", ids);
                 let my_id = &id;
                 for id in ids {
-                    vnodes.insert(
+                    state.vnodes.insert(
                         id,
                         VNode {
                             handoff: None,
@@ -359,14 +379,15 @@ pub(crate) async fn tick_loop(
     mut tasks: Receiver<Task>,
     mut tasks_tx: Sender<Task>,
 ) {
-    let mut vnodes: HashMap<u64, VNode> = HashMap::new();
+    let mut state = State::default();
+
     let (cnc_tx, mut cnc_rx) = channel(crate::CHANNEL_SIZE);
 
     let mut ticks = async_std::stream::interval(Duration::from_secs(1));
     loop {
         select! {
-            cmd = cnc_rx.next() => handle_cmd(&logger, cmd, &mut vnodes, &mut tasks_tx).await,
-            tick = ticks.next().fuse() =>  if ! handle_tick(&logger, &id, &mut vnodes, &mut tasks, &cnc_tx).await {
+            cmd = cnc_rx.next() => handle_cmd(&logger, cmd, &mut state, &mut tasks_tx).await,
+            tick = ticks.next().fuse() =>  if ! handle_tick(&logger, &id, &mut state, &mut tasks, &cnc_tx).await {
                 break
             },
         }
