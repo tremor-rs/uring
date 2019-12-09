@@ -12,14 +12,60 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::*;
+use crate::vnode;
 use async_std::net::ToSocketAddrs;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
-use futures::channel::mpsc::{channel, Sender};
+use futures::channel::mpsc::{channel, Sender, Receiver};
 use futures::{SinkExt, StreamExt};
 use slog::Logger;
-use tungstenite::protocol::Message;
+use tungstenite::protocol::Message as TungstenMessage;
+use serde_derive::{Deserialize, Serialize};
+use async_std::net::SocketAddr;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) enum Direction {
+    Inbound,
+    Outbound,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct Handoff {
+    pub partner: String,
+    pub chunk: u64,
+    pub direction: Direction,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) enum Message {
+    Start {
+        src: String,
+        vnode: u64,
+    },
+    Data {
+        vnode: u64,
+        chunk: u64,
+        data: Vec<String>,
+    },
+    Finish {
+        vnode: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) enum Ack {
+    Start { vnode: u64 },
+    Data { chunk: u64 },
+    Finish { vnode: u64 },
+}
+
+struct Connection {
+    addr: SocketAddr,
+    rx: Receiver<TungstenMessage>,
+    tx: Sender<TungstenMessage>,
+    tasks: Sender<vnode::Task>,
+    vnode: Option<u64>,
+}
 
 async fn handle_connection(logger: Logger, mut connection: Connection) {
     while let Some(msg) = connection.rx.next().await {
@@ -28,52 +74,52 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
             "Received a message from {}: {}", connection.addr, msg
         );
         match serde_json::from_slice(&msg.into_data()) {
-            Ok(HandoffMsg::Start { src, vnode }) => {
+            Ok(Message::Start { src, vnode }) => {
                 assert!(connection.vnode.is_none());
                 connection.vnode = Some(vnode);
                 connection
                     .tasks
-                    .send(Task::HandoffInStart { src, vnode })
+                    .send(vnode::Task::HandoffInStart { src, vnode })
                     .await
                     .unwrap();
                 info!(logger, "handoff for node {} started", vnode);
                 connection
                     .tx
-                    .send(Message::text(
-                        serde_json::to_string(&HandoffAck::Start { vnode }).unwrap(),
+                    .send(TungstenMessage::text(
+                        serde_json::to_string(&Ack::Start { vnode }).unwrap(),
                     ))
                     .await
                     .expect("Failed to forward message");
             }
-            Ok(HandoffMsg::Data { vnode, data, chunk }) => {
+            Ok(Message::Data { vnode, data, chunk }) => {
                 if let Some(vnode_current) = connection.vnode {
                     assert_eq!(vnode, vnode_current);
                     connection
                         .tasks
-                        .send(Task::HandoffIn { data, vnode, chunk })
+                        .send(vnode::Task::HandoffIn { data, vnode, chunk })
                         .await
                         .unwrap();
                     connection
                         .tx
-                        .send(Message::text(
-                            serde_json::to_string(&HandoffAck::Data { chunk: chunk }).unwrap(),
+                        .send(TungstenMessage::text(
+                            serde_json::to_string(&Ack::Data { chunk: chunk }).unwrap(),
                         ))
                         .await
                         .expect("Failed to forward message");
                 }
             }
-            Ok(HandoffMsg::Finish { vnode }) => {
+            Ok(Message::Finish { vnode }) => {
                 if let Some(node_id) = connection.vnode {
                     assert_eq!(node_id, vnode);
                     connection
                         .tasks
-                        .send(Task::HandoffInEnd { vnode })
+                        .send(vnode::Task::HandoffInEnd { vnode })
                         .await
                         .unwrap();
                     connection
                         .tx
-                        .send(Message::text(
-                            serde_json::to_string(&HandoffAck::Finish { vnode }).unwrap(),
+                        .send(TungstenMessage::text(
+                            serde_json::to_string(&Ack::Finish { vnode }).unwrap(),
                         ))
                         .await
                         .expect("Failed to forward message");
@@ -86,7 +132,7 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
     }
 }
 
-async fn accept_connection(logger: Logger, stream: TcpStream, tasks: Sender<Task>) {
+async fn accept_connection(logger: Logger, stream: TcpStream, tasks: Sender<vnode::Task>) {
     let addr = stream
         .peer_addr()
         .expect("connected streams should have a peer address");
@@ -126,10 +172,10 @@ async fn accept_connection(logger: Logger, stream: TcpStream, tasks: Sender<Task
     info!(logger, "Closing WebSocket connection: {}", addr);
 }
 
-pub(crate) async fn server_loop(
+pub(crate) async fn listener(
     logger: Logger,
     addr: String,
-    tasks: Sender<Task>,
+    tasks: Sender<vnode::Task>,
 ) -> Result<(), std::io::Error> {
     let addr = addr
         .to_socket_addrs()

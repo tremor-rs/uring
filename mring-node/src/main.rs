@@ -14,101 +14,19 @@
 
 #![recursion_limit = "2048"]
 
-mod handoff_listener;
-mod mring_listener;
-mod vnode_manager;
-use handoff_listener::*;
-use mring_listener::*;
-use vnode_manager::*;
+mod handoff;
+mod uring;
+mod vnode;
 
-use async_std::net::SocketAddr;
 use async_std::task;
-use async_tungstenite::connect_async;
-use futures::channel::mpsc::{channel, Receiver, Sender};
-use serde_derive::{Deserialize, Serialize};
+use futures::channel::mpsc::channel;
 use slog::Drain;
 use std::env;
-use tungstenite::protocol::Message;
-use uring_common::MRingNodes;
 
 const CHANNEL_SIZE: usize = 64usize;
 
 #[macro_use]
 extern crate slog;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-enum Direction {
-    Inbound,
-    Outbound,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct Handoff {
-    partner: String,
-    chunk: u64,
-    direction: Direction,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-struct VNode {
-    id: u64,
-    handoff: Option<Handoff>,
-    data: Vec<String>,
-}
-
-enum Task {
-    HandoffOut {
-        target: String,
-        vnode: u64,
-    },
-    Assign {
-        vnodes: Vec<u64>,
-    },
-    Update {
-        next: MRingNodes,
-    },
-    HandoffInStart {
-        src: String,
-        vnode: u64,
-    },
-    HandoffIn {
-        vnode: u64,
-        chunk: u64,
-        data: Vec<String>,
-    },
-    HandoffInEnd {
-        vnode: u64,
-    },
-}
-
-struct Connection {
-    addr: SocketAddr,
-    rx: Receiver<Message>,
-    tx: Sender<Message>,
-    tasks: Sender<Task>,
-    vnode: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-enum HandoffMsg {
-    Start {
-        src: String,
-        vnode: u64,
-    },
-    Data {
-        vnode: u64,
-        chunk: u64,
-        data: Vec<String>,
-    },
-    Finish {
-        vnode: u64,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-enum HandoffAck {
-    Start { vnode: u64 },
-    Data { chunk: u64 },
-    Finish { vnode: u64 },
-}
 
 fn main() {
     let decorator = slog_term::TermDecorator::new().build();
@@ -129,18 +47,18 @@ fn main() {
         .unwrap_or_else(|| panic!("this program requires at least two argument"))
         .to_string();
 
-    task::spawn(tick_loop(
+    task::spawn(vnode::run(
         logger.clone(),
         local.clone(),
         tasks_rx,
         tasks_tx.clone(),
     ));
 
-    task::spawn(server_loop(
+    task::spawn(handoff::listener(
         logger.clone(),
         local.to_string(),
         tasks_tx.clone(),
     ));
 
-    task::block_on(run(logger, local, remote, tasks_tx))
+    task::block_on(uring::run(logger, local, remote, tasks_tx))
 }

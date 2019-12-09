@@ -12,19 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::*;
+use crate::handoff;
 use async_std::net::TcpStream;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::{select, FutureExt, SinkExt, StreamExt};
 use slog::Logger;
 use std::collections::HashMap;
 use std::time::Duration;
-use tungstenite::protocol::Message;
+use tungstenite::protocol::Message as TungstenMessage;
 use uring_common::MRingNodes;
+use async_tungstenite::connect_async;
+use serde_derive::{Serialize, Deserialize};
+use async_std::task;
 
 type WSStream = async_tungstenite::WebSocketStream<
     async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
 >;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+struct VNode {
+    id: u64,
+    handoff: Option<handoff::Handoff>,
+    data: Vec<String>,
+}
+
+pub(crate) enum Task {
+    HandoffOut {
+        target: String,
+        vnode: u64,
+    },
+    Assign {
+        vnodes: Vec<u64>,
+    },
+    Update {
+        next: MRingNodes,
+    },
+    HandoffInStart {
+        src: String,
+        vnode: u64,
+    },
+    HandoffIn {
+        vnode: u64,
+        chunk: u64,
+        data: Vec<String>,
+    },
+    HandoffInEnd {
+        vnode: u64,
+    },
+}
 
 struct HandoffWorker {
     logger: Logger,
@@ -81,7 +116,7 @@ impl HandoffWorker {
 
     async fn finish(&mut self) -> Result<(), HandoffError> {
         let vnode = self.vnode;
-        self.try_ack(HandoffMsg::Finish { vnode }, HandoffAck::Finish { vnode })
+        self.try_ack(handoff::Message::Finish { vnode }, handoff::Ack::Finish { vnode })
             .await?;
         self.cnc.send(Cmd::FinishHandoff { vnode }).await.unwrap();
         Ok(())
@@ -90,11 +125,11 @@ impl HandoffWorker {
     async fn init(&mut self) -> Result<(), HandoffError> {
         let vnode = self.vnode;
         self.try_ack(
-            HandoffMsg::Start {
+            handoff::Message::Start {
                 src: self.src.clone(),
                 vnode,
             },
-            HandoffAck::Start { vnode },
+            handoff::Ack::Start { vnode },
         )
         .await?;
         Ok(())
@@ -133,8 +168,8 @@ impl HandoffWorker {
             );
 
             self.try_ack(
-                HandoffMsg::Data { vnode, chunk, data },
-                HandoffAck::Data { chunk },
+                handoff::Message::Data { vnode, chunk, data },
+                handoff::Ack::Data { chunk },
             )
             .await?;
             self.chunk += 1;
@@ -148,10 +183,10 @@ impl HandoffWorker {
         }
     }
 
-    async fn try_ack(&mut self, msg: HandoffMsg, ack: HandoffAck) -> Result<(), HandoffError> {
+    async fn try_ack(&mut self, msg: handoff::Message, ack: handoff::Ack) -> Result<(), HandoffError> {
         if self
             .ws_stream
-            .send(Message::text(serde_json::to_string(&msg).unwrap()))
+            .send(TungstenMessage::text(serde_json::to_string(&msg).unwrap()))
             .await
             .is_err()
         {
@@ -166,7 +201,7 @@ impl HandoffWorker {
         };
 
         if let Some(Ok(data)) = self.ws_stream.next().await {
-            let r: HandoffAck = serde_json::from_slice(&data.into_data()).unwrap();
+            let r: handoff::Ack = serde_json::from_slice(&data.into_data()).unwrap();
             if ack != r {
                 error!(self.logger, "Bad reply for  handoff command {:?} for vnode {} to {}. Expected, {:?}, but gut {:?}", msg, self.vnode, self.target, ack, r);
                 return self.cancel().await;
@@ -245,7 +280,7 @@ async fn handle_cmd(
             if let Some(vnode) = state.vnodes.get_mut(&vnode) {
                 if let Some(ref mut handoff) = vnode.handoff {
                     assert_eq!(chunk, handoff.chunk);
-                    assert_eq!(handoff.direction, Direction::Outbound);
+                    assert_eq!(handoff.direction, handoff::Direction::Outbound);
                     if let Some(data) = vnode.data.get(chunk as usize) {
                         reply.send((chunk, vec![data.clone()])).await.unwrap();
                     } else {
@@ -278,7 +313,7 @@ async fn handle_cmd(
         Some(Cmd::FinishHandoff { vnode }) => {
             let v = state.vnodes.remove(&vnode).unwrap();
             let m = v.handoff.unwrap();
-            assert_eq!(m.direction, Direction::Outbound);
+            assert_eq!(m.direction, handoff::Direction::Outbound);
         }
         None => (),
     }
@@ -304,10 +339,10 @@ async fn handle_tick(
                         "relocating vnode {} to node {}", vnode.id, target
                     );
                     assert!(vnode.handoff.is_none());
-                        vnode.handoff = Some(Handoff {
+                        vnode.handoff = Some(handoff::Handoff {
                             partner: target.clone(),
                             chunk: 0,
-                            direction: Direction::Outbound
+                            direction: handoff::Direction::Outbound
 
                         });
                         if let Ok(worker) = HandoffWorker::new(logger.clone(), id.to_string(), target, vnode.id, cnc_tx.clone()).await {
@@ -317,7 +352,7 @@ async fn handle_tick(
             },
             Some(Task::HandoffInStart { vnode, src }) => {
                 state.vnodes.remove(&vnode);
-                state.vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(Handoff{partner: src, chunk: 0, direction: Direction::Inbound})});
+                state.vnodes.insert(vnode, VNode{id: vnode, data: vec![], handoff: Some(handoff::Handoff{partner: src, chunk: 0, direction: handoff::Direction::Inbound})});
             }
             Some(Task::HandoffIn { mut data, vnode, chunk }) => {
                 info!(
@@ -327,7 +362,7 @@ async fn handle_tick(
                 if let Some(node) = state.vnodes.get_mut(&vnode) {
                     if let Some(ref mut handoff) = &mut node.handoff {
                         assert_eq!(handoff.chunk, chunk);
-                        assert_eq!(handoff.direction, Direction::Inbound);
+                        assert_eq!(handoff.direction, handoff::Direction::Inbound);
                         node.data.append(&mut data);
                         handoff.chunk = chunk + 1;
                     } else {
@@ -341,7 +376,7 @@ async fn handle_tick(
             Some(Task::HandoffInEnd { vnode }) => {
                 if let Some(node) = state.vnodes.get_mut(&vnode) {
                     if let Some(ref mut handoff) = &mut node.handoff {
-                        assert_eq!(handoff.direction, Direction::Inbound);
+                        assert_eq!(handoff.direction, handoff::Direction::Inbound);
                     } else {
                         error!(logger, "no handoff in progress for data vnode {}", vnode)
                     }
@@ -373,7 +408,7 @@ async fn handle_tick(
     true
 }
 
-pub(crate) async fn tick_loop(
+pub(crate) async fn run(
     logger: Logger,
     id: String,
     mut tasks: Receiver<Task>,

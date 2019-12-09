@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::*;
+use crate::vnode::Task;
 use async_tungstenite::connect_async;
 use futures::channel::mpsc::Sender;
 use futures::{select, FutureExt, SinkExt, StreamExt};

@@ -4,3 +4,4 @@
 raft-rocks*
 contrib/__pycache__
 coyote.html
+.DS_Store
