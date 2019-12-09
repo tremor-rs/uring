@@ -42,25 +42,25 @@ pub(crate) struct Handoff {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum Message {
-    Start {
+    HandoffStart {
         src: String,
         vnode: u64,
     },
-    Data {
+    HandoffData {
         vnode: u64,
         chunk: u64,
         data: Vec<String>,
     },
-    Finish {
+    HandoffFinish {
         vnode: u64,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum Ack {
-    Start { vnode: u64 },
-    Data { chunk: u64 },
-    Finish { vnode: u64 },
+    HandoffStart { vnode: u64 },
+    HandoffData { chunk: u64 },
+    HandoffFinish { vnode: u64 },
 }
 
 struct Connection {
@@ -78,7 +78,7 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
             "Received a message from {}: {}", connection.addr, msg
         );
         match serde_json::from_slice(&msg.into_data()) {
-            Ok(Message::Start { src, vnode }) => {
+            Ok(Message::HandoffStart { src, vnode }) => {
                 assert!(connection.vnode.is_none());
                 connection.vnode = Some(vnode);
                 connection
@@ -90,12 +90,12 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                 connection
                     .tx
                     .send(TungstenMessage::text(
-                        serde_json::to_string(&Ack::Start { vnode }).unwrap(),
+                        serde_json::to_string(&Ack::HandoffStart { vnode }).unwrap(),
                     ))
                     .await
                     .expect("Failed to forward message");
             }
-            Ok(Message::Data { vnode, data, chunk }) => {
+            Ok(Message::HandoffData { vnode, data, chunk }) => {
                 if let Some(vnode_current) = connection.vnode {
                     assert_eq!(vnode, vnode_current);
                     connection
@@ -106,13 +106,13 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     connection
                         .tx
                         .send(TungstenMessage::text(
-                            serde_json::to_string(&Ack::Data { chunk: chunk }).unwrap(),
+                            serde_json::to_string(&Ack::HandoffData { chunk: chunk }).unwrap(),
                         ))
                         .await
                         .expect("Failed to forward message");
                 }
             }
-            Ok(Message::Finish { vnode }) => {
+            Ok(Message::HandoffFinish { vnode }) => {
                 if let Some(node_id) = connection.vnode {
                     assert_eq!(node_id, vnode);
                     connection
@@ -123,7 +123,7 @@ async fn handle_connection(logger: Logger, mut connection: Connection) {
                     connection
                         .tx
                         .send(TungstenMessage::text(
-                            serde_json::to_string(&Ack::Finish { vnode }).unwrap(),
+                            serde_json::to_string(&Ack::HandoffFinish { vnode }).unwrap(),
                         ))
                         .await
                         .expect("Failed to forward message");
@@ -255,8 +255,11 @@ impl Worker {
 
     async fn finish(&mut self) -> Result<(), Error> {
         let vnode = self.vnode;
-        self.try_ack(Message::Finish { vnode }, Ack::Finish { vnode })
-            .await?;
+        self.try_ack(
+            Message::HandoffFinish { vnode },
+            Ack::HandoffFinish { vnode },
+        )
+        .await?;
         self.cnc
             .send(vnode::Cmd::FinishHandoff { vnode })
             .await
@@ -267,11 +270,11 @@ impl Worker {
     async fn init(&mut self) -> Result<(), Error> {
         let vnode = self.vnode;
         self.try_ack(
-            Message::Start {
+            Message::HandoffStart {
                 src: self.src.clone(),
                 vnode,
             },
-            Ack::Start { vnode },
+            Ack::HandoffStart { vnode },
         )
         .await?;
         Ok(())
@@ -309,8 +312,11 @@ impl Worker {
                 "transfering chunk {} from vnode {}", chunk, vnode
             );
 
-            self.try_ack(Message::Data { vnode, chunk, data }, Ack::Data { chunk })
-                .await?;
+            self.try_ack(
+                Message::HandoffData { vnode, chunk, data },
+                Ack::HandoffData { chunk },
+            )
+            .await?;
             self.chunk += 1;
             Ok(true)
         } else {
