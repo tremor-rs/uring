@@ -143,37 +143,27 @@ async fn handle_change(
 ) {
     // This is an initial assignment
     if relocations.is_empty() {
-    if let Some(vnode) = next.iter().filter(|v| v.id == id).next() {
-                tasks
+        if let Some(vnode) = next.iter().find(|v| v.id == id) {
+            tasks
                 .send(Task::Assign {
                     vnodes: vnode.vnodes.clone(),
                 })
                 .await
                 .unwrap();
-
         };
         tasks
-        .send(Task::Update {
-            next: next.clone(),
-        })
-        .await            .unwrap();
-
-    } else {
-        if let Some(relocations) = relocations.remove(id) {
-            tasks
-            .send(Task::Update {
-                next,
-            })
+            .send(Task::Update { next: next.clone() })
             .await
             .unwrap();
-            for (target, ids) in relocations.destinations.into_iter() {
-                for vnode in ids {
-                    let target = target.clone();
-                    tasks
-                        .send(Task::HandoffOut { target, vnode})
-                        .await
-                        .unwrap();
-                }
+    } else if let Some(relocations) = relocations.remove(id) {
+        tasks.send(Task::Update { next }).await.unwrap();
+        for (target, ids) in relocations.destinations.into_iter() {
+            for vnode in ids {
+                let target = target.clone();
+                tasks
+                    .send(Task::HandoffOut { target, vnode })
+                    .await
+                    .unwrap();
             }
         }
     }

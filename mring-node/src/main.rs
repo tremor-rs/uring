@@ -38,14 +38,12 @@ fn main() {
 
     let local = env::args()
         .nth(1)
-        .unwrap_or_else(|| panic!("this program requires at least two arguments"))
-        .to_string();
+        .unwrap_or_else(|| panic!("this program requires at least two arguments"));
 
     // Specify the server address to which the client will be connecting.
     let remote = env::args()
         .nth(2)
-        .unwrap_or_else(|| panic!("this program requires at least two argument"))
-        .to_string();
+        .unwrap_or_else(|| panic!("this program requires at least two argument"));
 
     task::spawn(vnode::run(
         logger.clone(),

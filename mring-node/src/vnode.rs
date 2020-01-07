@@ -81,7 +81,7 @@ impl State {
     pub fn update_ring(&mut self, mapping: MRingNodes) {
         for node in mapping.into_iter() {
             for vnode in &node.vnodes {
-                &self.mappings.insert(*vnode, node.id.clone());
+                self.mappings.insert(*vnode, node.id.clone());
             }
         }
     }

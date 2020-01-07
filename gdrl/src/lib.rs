@@ -146,8 +146,8 @@ impl Limiter {
                         None => return Err(ConnectionError::Oops(2)),
                         Some(delta) => {
                             // We substract here as we equalivalize for the counter side.
-                            self.ci = self.ci - delta;
-                            if self.ci == self.last_ci {
+                            self.ci -= delta;
+                            if (self.ci - self.last_ci).abs() <= std::f64::EPSILON {
                                 self.stable_ticks += 1;
                             } else {
                                 self.last_ci = self.ci;
@@ -162,8 +162,8 @@ impl Limiter {
                         Some((qj, mut tx)) => {
                             let delta = self.eta * (self.qi - qj);
                             tx.send(delta).await.map_err(|_| ConnectionError::Oops(4))?;
-                            self.ci = self.ci + delta;
-                            if self.ci == self.last_ci {
+                            self.ci += delta;
+                            if (self.ci - self.last_ci).abs() <= std::f64::EPSILON  {
                                 self.stable_ticks += 1;
                             } else {
                                 self.last_ci = self.ci;
@@ -189,7 +189,10 @@ mod tests {
     use std::time::Duration;
 
     fn print_state(_n: u8, _c: f64, _q: f64, _s: u64) {
-        println!("=============L{}(c: {} / q: {} / s: {})=============", _n, _c, _q, _s);
+        println!(
+            "=============L{}(c: {} / q: {} / s: {})=============",
+            _n, _c, _q, _s
+        );
     }
     #[test]
     fn reaches_quiescence_3x1() {
@@ -197,14 +200,13 @@ mod tests {
         let c = 1000.0;
         let nodes = 3;
         let connections = 1;
-        let eta = 1.0/(2.0 * ((nodes * connections) as f64));
+        let eta = 1.0 / (2.0 * ((nodes * connections) as f64));
         let (tx1, rx1) = channel(64);
         let mut l1 = Limiter::new(rx1, eta, c);
         let (tx2, rx2) = channel(64);
         let mut l2 = Limiter::new(rx2, eta, 0.0);
         let (tx3, rx3) = channel(64);
         let mut l3 = Limiter::new(rx3, eta, 0.0);
-
 
         // add l2 as a nighbour node to l1
         l1.add_neighbour(Neighbour::new(tx2));
@@ -246,9 +248,9 @@ mod tests {
                 tx3.send(true).await
             });
 
-            rx1.next().await;            
-            rx2.next().await;            
-            rx3.next().await;                        
+            rx1.next().await;
+            rx2.next().await;
+            rx3.next().await;
         });
     }
 
@@ -258,7 +260,7 @@ mod tests {
         let c = 1000.0;
         let nodes = 5;
         let connections = 2;
-        let eta = 1.0/(2.0 * ((nodes * connections) as f64));
+        let eta = 1.0 / (2.0 * ((nodes * connections) as f64));
         let (tx1, rx1) = channel(64);
         let mut l1 = Limiter::new(rx1, eta, c);
         let (tx2, rx2) = channel(64);
@@ -343,11 +345,11 @@ mod tests {
                 tx5.send(true).await
             });
 
-            rx1.next().await;            
-            rx2.next().await;            
-            rx3.next().await;                        
-            rx4.next().await;                        
-            rx5.next().await;                        
+            rx1.next().await;
+            rx2.next().await;
+            rx3.next().await;
+            rx4.next().await;
+            rx5.next().await;
         });
     }
 }
