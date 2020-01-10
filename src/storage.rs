@@ -22,11 +22,13 @@ pub use raft::storage::Storage as ReadStorage;
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Borrow;
+
 #[async_trait]
 pub trait Storage: WriteStorage + ReadStorage {
     async fn new_with_conf_state(id: NodeId, state: ConfState) -> Self;
     async fn new(id: NodeId) -> Self;
 }
+
 /// The missing storage trait from raft-rs ...
 #[async_trait]
 pub trait WriteStorage {
