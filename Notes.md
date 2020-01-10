@@ -5,11 +5,10 @@ transport (WS, REST)
   has: SwitchInboundChannelSender
   has: SwitchOutboundChannelReceiver
   has: SwitchOutboundChannelSender
-    
 
 
 
-^-(channel = request + client-id + correleation-id / reply + client-id + correleation-id )-v
+^-(channel = request + client-id + correleation-id (SwitchInboundChanell) / reply + client-id + correleation-id (SwitchOutboundChannel) )-v
 
 Protocol-Switch (Connect, Select)
   has: SwitchInboundChannelReceiver
@@ -19,3 +18,5 @@ Protocol-Switch (Connect, Select)
  Sub-Protocosl-Handling
 
 ```
+
+
