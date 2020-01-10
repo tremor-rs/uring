@@ -122,6 +122,26 @@ pub struct HandlerOutboundMessage {
     pub id: MessageId,
 }
 
+impl HandlerOutboundMessage {
+    pub fn ok(id: MessageId, data: Vec<u8>) -> Self {
+        Self {
+            id,
+            data: DriverOutboundData::Ok(data),
+        }
+    }
+    pub fn error<T>(id: MessageId, error: DriverErrorType, message: T) -> Self
+    where
+        T: ToString,
+    {
+        Self {
+            id,
+            data: DriverOutboundData::Error(DriverError {
+                error,
+                message: message.to_string(),
+            }),
+        }
+    }
+}
 pub type HandlerOutboundChannelReceiver = Receiver<HandlerOutboundMessage>;
 pub type HandlerOutboundChannelSender = Sender<HandlerOutboundMessage>;
 

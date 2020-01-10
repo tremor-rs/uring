@@ -1973,6 +1973,7 @@ dependencies = [
  "http 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "http-service-hyper 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protocol-driver 0.1.0",
  "raft 0.6.0-alpha (git+https://github.com/tikv/raft-rs)",
  "rocksdb 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.114 (registry+https://github.com/rust-lang/crates.io-index)",
