@@ -11,3 +11,5 @@ async-std = {version="*", features = ["unstable"]}
 futures = "0.3"
 serde = "1.0"
 serde_derive = "1.0"
+uring-common = { path = "../uring-common" }
+async-trait = "0.1"

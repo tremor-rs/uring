@@ -55,6 +55,7 @@ pub struct Network {
     tx: UnboundedSender<UrMsg>,
     next_eid: u64,
     pending: HashMap<EventId, Reply>,
+    prot_pending: HashMap<EventId, (RequestId, protocol_driver::HandlerOutboundChannelSender)>,
 }
 
 pub(crate) struct Reply(RequestId, Sender<WsMessage>);
@@ -96,21 +97,37 @@ pub(crate) enum UrMsg {
     MRingGetNodes(Reply),
     MRingAddNode(String, Reply),
     MRingRemoveNode(String, Reply),
+
+    Protocol(ProtocolMessage),
+}
+
+pub(crate) enum ProtocolMessage {
+    Event {
+        id: RequestId,
+        service_id: ServiceId,
+        event: Vec<u8>,
+        reply: protocol_driver::HandlerOutboundChannelSender,
+    },
 }
 
 #[async_trait]
 impl NetworkTrait for Network {
     async fn event_reply(&mut self, id: EventId, code: u16, data: Vec<u8>) -> Result<(), Error> {
-        match self.pending.remove(&id) {
-            Some(Reply(rid, mut sender)) => {
-                let data: serde_json::Value = serde_json::from_slice(&data).unwrap();
-                sender
-                    .send(ProtoReply { code, rid, data }.into())
-                    .await
-                    .unwrap()
-            }
-            None => error!(self.logger, "Uknown event id {} for reply: {:?}", id, data),
+        if let Some(Reply(rid, mut sender)) = self.pending.remove(&id) {
+            let data: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            sender
+                .send(ProtoReply { code, rid, data }.into())
+                .await
+                .unwrap()
+        } else if let Some((rid, mut sender)) = self.prot_pending.remove(&id) {
+            sender
+                .send(protocol_driver::HandlerOutboundMessage::ok(rid, data))
+                .await
+                .unwrap()
+        } else {
+            error!(self.logger, "Uknown event id {} for reply: {:?}", id, data)
         };
+
         Ok(())
     }
 
@@ -122,6 +139,17 @@ impl NetworkTrait for Network {
             return None;
         };
         match msg {
+            UrMsg::Protocol(msg) => match msg {
+                ProtocolMessage::Event {
+                    id,
+                    service_id,
+                    event,
+                    reply,
+                } => {
+                    let eid = self.register_prot_reply(id, reply);
+                    Some(RaftNetworkMsg::Event(eid, service_id, event))
+                }
+            },
             UrMsg::MRingSetSize(size, reply) => {
                 let eid = self.register_reply(reply);
                 Some(RaftNetworkMsg::Event(
@@ -269,6 +297,7 @@ impl NetworkTrait for Network {
             }
         }
     }
+
     async fn ack_proposal(
         &mut self,
         to: NodeId,
@@ -444,12 +473,24 @@ impl Network {
             tx,
             next_eid: 1,
             pending: HashMap::new(),
+            prot_pending: HashMap::new(),
         }
     }
     fn register_reply(&mut self, reply: Reply) -> EventId {
         let eid = EventId(self.next_eid);
         self.next_eid += 1;
         self.pending.insert(eid, reply);
+        eid
+    }
+
+    fn register_prot_reply(
+        &mut self,
+        rid: RequestId,
+        reply: protocol_driver::HandlerOutboundChannelSender,
+    ) -> EventId {
+        let eid = EventId(self.next_eid);
+        self.next_eid += 1;
+        self.prot_pending.insert(eid, (rid, reply));
         eid
     }
 }
