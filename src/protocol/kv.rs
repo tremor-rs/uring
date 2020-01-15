@@ -36,7 +36,8 @@ enum Request {
     },
 }
 
-struct Handler {}
+#[derive(Default)]
+pub struct Handler {}
 
 #[async_trait]
 impl interceptor::Intercept for Handler {

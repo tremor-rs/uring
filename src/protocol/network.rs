@@ -14,12 +14,17 @@
 
 use crate::network::ws::{ProtocolMessage, UrMsg};
 use async_trait::async_trait;
-use futures::channel::mpsc::Sender;
+use futures::channel::mpsc::UnboundedSender;
 use futures::SinkExt;
 use protocol_driver::{interceptor, DriverErrorType, HandlerInboundMessage};
 
-pub struct Handler {
-    network: Sender<UrMsg>,
+pub(crate) struct Handler {
+    network: UnboundedSender<UrMsg>,
+}
+impl Handler {
+    pub fn new(network: UnboundedSender<UrMsg>) -> Self {
+        Self { network }
+    }
 }
 
 #[async_trait]

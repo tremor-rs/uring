@@ -21,16 +21,18 @@ use serde_derive::{Deserialize, Serialize};
 use std::{collections::HashMap, hash::Hash};
 pub use uring_common::{RequestId, ServiceId};
 
+pub use interceptor::*;
+
 pub type CustomProtocol = String;
 
-#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Debug)]
 pub enum Protocol {
     Connect,
     None,
     Custom(CustomProtocol),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub enum DriverInboundData {
     Message(Vec<u8>),
     Select(CustomProtocol),
@@ -56,10 +58,7 @@ pub struct DriverError {
     pub message: String,
 }
 
-pub enum DriverOutboundData {
-    Ok(Vec<u8>),
-    Error(DriverError),
-}
+type DriverOutboundData = Result<Vec<u8>, DriverError>;
 
 pub type ClientId = u64;
 pub type CorrelationId = u64;
@@ -117,7 +116,7 @@ impl DriverOutboundMessage {
     {
         Self {
             id,
-            data: DriverOutboundData::Error(DriverError {
+            data: DriverOutboundData::Err(DriverError {
                 error,
                 message: message.to_string(),
             }),
@@ -154,7 +153,7 @@ impl HandlerOutboundMessage {
     {
         Self {
             id,
-            data: DriverOutboundData::Error(DriverError {
+            data: DriverOutboundData::Err(DriverError {
                 error,
                 message: message.to_string(),
             }),
@@ -177,7 +176,6 @@ pub struct Driver {
     pending: HashMap<RequestId, (MessageId, DriverOutboundChannelSender)>,
     clients: HashMap<ClientId, ClientConnection>,
     protocol_handlers: HashMap<CustomProtocol, HandlerInboundChannelSender>,
-
     next_rid: u64,
 }
 
@@ -199,7 +197,11 @@ impl Default for Driver {
 }
 
 impl Driver {
-    pub async fn run_loop(&mut self) -> Result<(), SendError> {
+    pub fn register_handler<S: ToString>(&mut self, name: S, handler: HandlerInboundChannelSender) {
+        self.protocol_handlers.insert(name.to_string(), handler);
+    }
+
+    pub async fn run_loop(mut self) -> Result<(), SendError> {
         loop {
             select! {
                 msg = self.transport_rx.next() => {
@@ -226,10 +228,12 @@ impl Driver {
 
     async fn outbound_handler(&mut self, msg: HandlerOutboundMessage) -> Result<(), SendError> {
         let HandlerOutboundMessage { data, id } = msg;
+
         if let Some((id, mut transport)) = self.pending.remove(&id) {
             let msg = DriverOutboundMessage { id, data };
             transport.send(msg).await?;
         };
+
         Ok(())
     }
 
@@ -240,7 +244,6 @@ impl Driver {
             id,
             mut outbound_channel,
         } = msg;
-
         let client = self.clients.entry(id.client).or_default();
         let keep_client = match (&client.protocol, &data) {
             // When we're in connect
@@ -278,11 +281,12 @@ impl Driver {
                     handler.send(msg).await?;
                     true
                 } else {
+                    let err = format!("Invalid protocol {}", proto);
                     outbound_channel
                         .send(DriverOutboundMessage::error(
                             id,
                             DriverErrorType::BadProtocol,
-                            format!("Invalid protocol {}", proto),
+                            err,
                         ))
                         .await
                         .is_ok()
@@ -292,19 +296,18 @@ impl Driver {
             | (Protocol::Custom(_), DriverInboundData::Select(proto)) => {
                 if client.enabled_protocols.contains(proto) {
                     client.protocol = Protocol::Custom(proto.clone());
+
                     outbound_channel
                         .send(DriverOutboundMessage::ok(id, vec![]))
                         .await
                         .is_ok()
                 } else {
-                    outbound_channel
-                        .send(DriverOutboundMessage::error(
-                            id,
-                            DriverErrorType::BadProtocol,
-                            format!("Invalid protocol {}", proto),
-                        ))
-                        .await
-                        .is_ok()
+                    let error = DriverOutboundMessage::error(
+                        id,
+                        DriverErrorType::BadProtocol,
+                        format!("Invalid protocol {}", proto),
+                    );
+                    outbound_channel.send(error).await.is_ok()
                 }
             }
             (Protocol::None, _) => outbound_channel
@@ -326,11 +329,12 @@ impl Driver {
                 .is_ok(),
             (Protocol::Custom(proto), DriverInboundData::Message(data)) => {
                 if !client.enabled_protocols.contains(&proto) {
+                    let err = format!("Protocol {} is not enabled.", proto);
                     outbound_channel
                         .send(DriverOutboundMessage::error(
                             id,
                             DriverErrorType::BadProtocol,
-                            format!("Protocol {} is not enabled.", proto),
+                            err,
                         ))
                         .await
                         .is_ok()
@@ -348,11 +352,12 @@ impl Driver {
                     handler.send(msg).await?;
                     true
                 } else {
+                    let err = format!("Protocol {} is not known.", proto);
                     outbound_channel
                         .send(DriverOutboundMessage::error(
                             id,
                             DriverErrorType::BadProtocol,
-                            format!("Protocol {} is not known.", proto),
+                            err,
                         ))
                         .await
                         .is_ok()

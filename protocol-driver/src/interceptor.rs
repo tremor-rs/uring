@@ -18,7 +18,7 @@ use crate::{
     HandlerOutboundMessage,
 };
 use async_trait::async_trait;
-use futures::channel::mpsc::SendError;
+use futures::channel::mpsc::{channel, SendError};
 use futures::{select, SinkExt, StreamExt};
 use std::collections::HashMap;
 use uring_common::RequestId;
@@ -63,7 +63,25 @@ impl<T> Interceptor<T>
 where
     T: Intercept,
 {
-    pub async fn run_loop(&mut self) -> Result<(), SendError> {
+    pub fn new(handler: T) -> Self {
+        let (tx, rx) = channel(64);
+        let (service_reply_tx, service_reply_rx) = channel(64);
+        Self {
+            handler,
+            rx,
+            tx,
+            next_tx: None,
+            service_reply_rx,
+            service_reply_tx,
+            pending: HashMap::new(),
+        }
+    }
+
+    pub fn connect_next<TNext: Intercept>(&mut self, next: &mut Interceptor<TNext>) {
+        self.next_tx = Some(next.tx.clone());
+    }
+
+    pub async fn run_loop(mut self) -> Result<(), SendError> {
         loop {
             select! {
                 msg = self.rx.next() => {

@@ -15,6 +15,7 @@
 mod client;
 mod rest;
 mod server;
+mod server2;
 use crate::network::{
     Error, EventId, Network as NetworkTrait, ProposalId, RaftNetworkMsg, ServiceId,
 };
@@ -456,11 +457,33 @@ impl Network {
         let endpoint = ws_endpoint.to_string();
 
         task::spawn(server::run(logger.clone(), node.clone(), endpoint.clone()));
+
         if let Some(rest_endpoint) = rest_endpoint {
             error!(logger, "ENDPOINT: {}", rest_endpoint);
             let rest_endpoint = rest_endpoint.to_string();
             task::spawn(rest::run(logger.clone(), node, rest_endpoint));
         }
+
+        let net_handler = crate::protocol::network::Handler::new(tx.clone());
+        let mut net_interceptor = protocol_driver::Interceptor::new(net_handler);
+        let kv_handler = crate::protocol::kv::Handler::default();
+        let mut kv_interceptor = protocol_driver::Interceptor::new(kv_handler);
+        kv_interceptor.connect_next(&mut net_interceptor);
+
+        let mut driver = protocol_driver::Driver::default();
+
+        driver.register_handler("kv", kv_interceptor.tx.clone());
+        task::spawn(net_interceptor.run_loop());
+        task::spawn(kv_interceptor.run_loop());
+
+        let driver_tx = driver.transport_tx.clone();
+        task::spawn(driver.run_loop());
+
+        task::spawn(server2::run(
+            logger.clone(),
+            driver_tx,
+            "localhost:1234".to_string(),
+        ));
 
         Self {
             id,
