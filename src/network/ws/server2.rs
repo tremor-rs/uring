@@ -35,16 +35,19 @@ pub(crate) struct Connection {
     rx: DriverOutboundChannelReceiver,
     ws_rx: Receiver<Message>,
     ws_tx: Sender<Message>,
+    client_id: u64,
 }
 
 impl Connection {
     pub(crate) fn new(
+        client_id: u64,
         protocol_driver: DriverInboundChannelSender,
         ws_rx: Receiver<Message>,
         ws_tx: Sender<Message>,
     ) -> Self {
         let (tx, rx) = channel(crate::CHANNEL_SIZE);
         Self {
+            client_id,
             rx,
             tx,
             protocol_driver,
@@ -110,6 +113,7 @@ impl Connection {
 }
 
 pub(crate) async fn accept_connection<S>(
+    client_id: u64,
     logger: Logger,
     driver: DriverInboundChannelSender,
     stream: S,
@@ -129,7 +133,7 @@ pub(crate) async fn accept_connection<S>(
     let (mut msg_tx, msg_rx) = channel(crate::CHANNEL_SIZE);
     let (response_tx, mut response_rx) = channel(crate::CHANNEL_SIZE);
 
-    let c = Connection::new(driver, msg_rx, response_tx);
+    let c = Connection::new(client_id, driver, msg_rx, response_tx);
     task::spawn(c.msg_loop(logger.clone()));
 
     loop {
@@ -179,8 +183,15 @@ pub(crate) async fn run(
     let listener = try_socket.expect("Failed to bind");
     info!(logger, "Listening on: {}", addr);
 
+    let mut client_id = 1;
     while let Ok((stream, _)) = listener.accept().await {
-        task::spawn(accept_connection(logger.clone(), driver.clone(), stream));
+        task::spawn(accept_connection(
+            client_id,
+            logger.clone(),
+            driver.clone(),
+            stream,
+        ));
+        client_id += 1;
     }
 
     Ok(())
