@@ -451,7 +451,7 @@ impl Network {
             tx: tx.clone(),
             id,
             logger: logger.clone(),
-            pubsub,
+            pubsub: pubsub.clone(),
         };
 
         let endpoint = ws_endpoint.to_string();
@@ -470,11 +470,16 @@ impl Network {
         let mut kv_interceptor = protocol_driver::Interceptor::new(kv_handler);
         kv_interceptor.connect_next(&mut net_interceptor);
 
+        let ps_handler = crate::protocol::pubsub::Handler::new(pubsub);
+        let ps_interceptor = protocol_driver::Interceptor::new(ps_handler);
+
         let mut driver = protocol_driver::Driver::default();
 
         driver.register_handler("kv", kv_interceptor.tx.clone());
+        driver.register_handler("pubsub", ps_interceptor.tx.clone());
         task::spawn(net_interceptor.run_loop());
         task::spawn(kv_interceptor.run_loop());
+        task::spawn(ps_interceptor.run_loop());
 
         let driver_tx = driver.transport_tx.clone();
         task::spawn(driver.run_loop());

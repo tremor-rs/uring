@@ -36,6 +36,7 @@ pub(crate) struct Connection {
     ws_rx: Receiver<Message>,
     ws_tx: Sender<Message>,
     client_id: u64,
+    msg_id: u64,
 }
 
 impl Connection {
@@ -53,6 +54,7 @@ impl Connection {
             protocol_driver,
             ws_rx,
             ws_tx,
+            msg_id: 0,
         }
     }
 
@@ -106,8 +108,9 @@ impl Connection {
         let msg = DriverInboundMessage {
             data,
             outbound_channel: self.tx.clone(),
-            id: MessageId::new(0, 0),
+            id: MessageId::new(self.client_id, self.msg_id),
         };
+        self.msg_id += 1;
         self.protocol_driver.send(msg).await.unwrap();
     }
 }

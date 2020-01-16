@@ -106,12 +106,22 @@ where
         Ok(())
     }
     async fn outbound_handler(&mut self, msg: HandlerOutboundMessage) -> Result<(), SendError> {
-        if let Some(mut tx) = self.pending.remove(&msg.id) {
-            tx.send(msg).await
+        if msg.close {
+            if let Some(mut tx) = self.pending.remove(&msg.id) {
+                tx.send(msg).await
+            } else {
+                println!("No pending reply to send to");
+                // TODO: handle error
+                Ok(())
+            }
         } else {
-            println!("No pending reply to send to");
-            // TODO: handle error
-            Ok(())
+            if let Some(tx) = self.pending.get_mut(&msg.id) {
+                tx.send(msg).await
+            } else {
+                println!("No pending reply to send to");
+                // TODO: handle error
+                Ok(())
+            }
         }
     }
     async fn inbound_handler(&mut self, mut msg: HandlerInboundMessage) -> Result<(), SendError> {
