@@ -86,6 +86,7 @@ pub enum MRRequest {
 pub enum VRequest {
     Get { rid: RequestId },
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SRequest {
     Get { rid: RequestId },

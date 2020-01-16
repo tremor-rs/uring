@@ -348,49 +348,48 @@ impl Connection {
     pub async fn msg_loop(mut self, logger: Logger) {
         loop {
             let cont = select! {
-                            msg = self.rx.next() => {
-                                if let Some(msg) = msg {
-                                      let msg2 = msg.clone();
-            //                        if !self.handle_control(msg.clone(), false).await {
-                                        let handled_ok = match self.protocol {
-                                            None => self.handle_initial(msg).await,
-                                            Some(Protocol::KV) => self.handle_kv(msg).await,
-                                            Some(Protocol::URing) => self.handle_uring(msg).await,
-                                            Some(Protocol::MRing) => self.handle_mring(msg).await,
-                                            Some(Protocol::Version) => self.handle_version(msg).await,
-                                            Some(Protocol::Status) => self.handle_status(msg).await,
-                                        };
+                msg = self.rx.next() => {
+                    if let Some(msg) = msg {
+                          let msg2 = msg.clone();
+                            let handled_ok = match self.protocol {
+                                None => self.handle_initial(msg).await,
+                                Some(Protocol::KV) => self.handle_kv(msg).await,
+                                Some(Protocol::URing) => self.handle_uring(msg).await,
+                                Some(Protocol::MRing) => self.handle_mring(msg).await,
+                                Some(Protocol::Version) => self.handle_version(msg).await,
+                                Some(Protocol::Status) => self.handle_status(msg).await,
+                            };
 
-                                        handled_ok || self.handle_control(msg2, true).await
-                                } else {
-                                    false
-                                }
+                            handled_ok || self.handle_control(msg2, true).await
+                    } else {
+                        false
+                    }
 
-                            }
-                            msg = self.ws_rx.next() => {
-                                match self.protocol {
-                                    None | Some(Protocol::Status) | Some(Protocol::Version) | Some(Protocol::KV) | Some(Protocol::MRing) => match msg {
-                                        Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
-                                        Some(WsMessage::Reply(_, msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
-                                        None | Some(WsMessage::Raft(_)) => false,
-                                    }
-                                    Some(Protocol::URing) => match msg {
-                                        Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
-                                        Some(WsMessage::Raft(msg)) => self.tx.send(Message::Binary(encode_ws(msg).to_vec())).await.is_ok(),
-                                        Some(WsMessage::Reply(_, msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
-                                        None => false,
-                                    },
-                                }
-                            }
-                            msg = self.ps_rx.next() => {
-                                if let Some(msg) = msg {
-                                    self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()
-                                } else {
-                                    false
-                                }
-                            }
-                            complete => false
-                        };
+                }
+                msg = self.ws_rx.next() => {
+                    match self.protocol {
+                        None | Some(Protocol::Status) | Some(Protocol::Version) | Some(Protocol::KV) | Some(Protocol::MRing) => match msg {
+                            Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            Some(WsMessage::Reply(_, msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            None | Some(WsMessage::Raft(_)) => false,
+                        }
+                        Some(Protocol::URing) => match msg {
+                            Some(WsMessage::Ctrl(msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            Some(WsMessage::Raft(msg)) => self.tx.send(Message::Binary(encode_ws(msg).to_vec())).await.is_ok(),
+                            Some(WsMessage::Reply(_, msg)) =>self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok(),
+                            None => false,
+                        },
+                    }
+                }
+                msg = self.ps_rx.next() => {
+                    if let Some(msg) = msg {
+                        self.tx.send(Message::Text(serde_json::to_string(&msg).unwrap())).await.is_ok()
+                    } else {
+                        false
+                    }
+                }
+                complete => false
+            };
             if !cont {
                 error!(logger, "Client connection to {} down.", self.remote_id);
                 self.node
