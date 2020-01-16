@@ -60,8 +60,12 @@ impl interceptor::Intercept for Handler {
 }
 
 /*
- {"Connect": ["kv"]}
- {"Select": "kv"}
- {"Put": {"key": "snot", "store": "badger"}}
- {"Get": {"key": "snot"}}
+{"Connect": ["kv", "pubsub"]}
+
+{"Select": "pubsub"}
+{"Subscribe": {"channel": "kv"}}
+
+{"Select": "kv"}
+{"Put": {"key": "snot", "store": "badger"}}
+{"Get": {"key": "snot"}}
 */

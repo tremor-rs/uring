@@ -145,12 +145,21 @@ pub struct HandlerInboundMessage {
 #[derive(Debug)]
 pub struct HandlerOutboundMessage {
     pub data: HandlerOutboundData,
+    pub close: bool,
     pub id: RequestId,
 }
 
 impl HandlerOutboundMessage {
     pub fn ok(id: RequestId, data: Vec<u8>) -> Self {
         Self {
+            id,
+            close: true,
+            data: DriverOutboundData::Ok(data),
+        }
+    }
+    pub fn partial(id: RequestId, data: Vec<u8>) -> Self {
+        Self {
+            close: false,
             id,
             data: DriverOutboundData::Ok(data),
         }
@@ -161,6 +170,7 @@ impl HandlerOutboundMessage {
     {
         Self {
             id,
+            close: true,
             data: DriverOutboundData::Err(DriverError {
                 error,
                 message: message.to_string(),
@@ -217,7 +227,7 @@ impl Driver {
                         self.inbound_handler(msg).await?;
                     } else {
                         println!("failed to read transport message");
-                        // ARGH! errro
+                        // ARGH! errror
                         break;
                     };
                 },
@@ -226,7 +236,7 @@ impl Driver {
                         self.outbound_handler(msg).await?;
                     } else {
                         println!("failed to read handler message");
-                        // ARGH! errro
+                        // ARGH! errror
                         break;
                     };
 
@@ -237,13 +247,25 @@ impl Driver {
     }
 
     async fn outbound_handler(&mut self, msg: HandlerOutboundMessage) -> Result<(), SendError> {
-        let HandlerOutboundMessage { data, id } = msg;
+        let HandlerOutboundMessage { data, id, close } = msg;
 
-        if let Some((id, mut transport)) = self.pending.remove(&id) {
-            let msg = DriverOutboundMessage { id, data };
-            transport.send(dbg!(msg)).await?;
+        if close {
+            if let Some((id, mut transport)) = self.pending.remove(&id) {
+                let msg = DriverOutboundMessage { id, data };
+                transport.send(dbg!(msg)).await?;
+            } else {
+                println!("No outbound destination")
+            }
         } else {
-            println!("No outbound destiation")
+            if let Some((id, transport)) = self.pending.get_mut(&id) {
+                let msg = DriverOutboundMessage {
+                    id: id.clone(),
+                    data,
+                };
+                transport.send(dbg!(msg)).await?;
+            } else {
+                println!("No outbound destination")
+            }
         }
 
         Ok(())
