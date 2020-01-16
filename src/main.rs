@@ -18,12 +18,12 @@ mod codec;
 #[allow(unused)]
 pub mod errors;
 pub mod network;
+mod protocol;
 mod pubsub;
 pub mod raft_node;
 pub mod service;
 pub mod storage;
 pub mod version;
-mod protocol;
 
 use crate::network::{ws, Network, RaftNetworkMsg};
 use crate::raft_node::*;

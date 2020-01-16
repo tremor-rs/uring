@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::pubsub;
-use crate::service::kv;
 use async_std::task;
 use async_trait::async_trait;
 use futures::channel::mpsc::channel;
@@ -22,7 +21,6 @@ use protocol_driver::{
     interceptor, DriverErrorType, HandlerInboundMessage, HandlerOutboundMessage,
 };
 use serde_derive::{Deserialize, Serialize};
-use ws_proto::SubscriberMsg;
 
 #[derive(Deserialize, Serialize, Debug)]
 enum Request {
@@ -48,8 +46,7 @@ impl Handler {
 
 #[async_trait]
 impl interceptor::Intercept for Handler {
-    async fn inbound(&mut self, mut msg: HandlerInboundMessage) -> interceptor::Reply {
-        msg.service_id = Some(kv::ID);
+    async fn inbound(&mut self, msg: HandlerInboundMessage) -> interceptor::Reply {
         match dbg!(serde_json::from_slice(&msg.data)) {
             Ok(Request::Subscribe { channel: c }) => {
                 let (tx, mut rx) = channel(64);
