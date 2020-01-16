@@ -115,8 +115,8 @@ connections: {:?}
                 &g.raft.term,
                 &g.raft.store().last_index().unwrap_or(0),
                 &g.raft.vote,
-                &g.raft.votes,
-                &g.raft.prs().configuration().voters(),
+                &g.raft.prs().votes(),
+                &g.raft.prs().conf().voters(),
                 &self.network.connections(),
             )
         } else {
@@ -329,7 +329,8 @@ where
                 .unwrap()
                 .raft
                 .prs()
-                .configuration()
+                .conf()
+                .voters()
                 .contains(id.0)
         } else {
             false
@@ -352,9 +353,9 @@ where
                 "last-index" => raft.raft_log.store.last_index().unwrap_or(0),
 
                 "vote" => raft.vote,
-                "votes" => format!("{:?}", raft.votes),
+                "votes" => format!("{:?}", raft.prs().votes()),
 
-                "voters" => format!("{:?}", raft.prs().configuration().voters()),
+                "voters" => format!("{:?}", raft.prs().conf().voters()),
 
                 "promotable" => raft.promotable(),
                 "pass-election-timeout" => raft.pass_election_timeout(),

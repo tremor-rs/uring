@@ -14,7 +14,7 @@
 
 use super::*;
 use async_std::net::TcpStream;
-use async_tungstenite::connect_async;
+use async_tungstenite::async_std::connect_async;
 use futures::channel::mpsc::{channel, Receiver, Sender, UnboundedSender};
 use futures::{select, FutureExt, StreamExt};
 use slog::Logger;
@@ -22,9 +22,7 @@ use tungstenite::protocol::Message;
 use uring_common::NodeId;
 use ws_proto::{Protocol, ProtocolSelect};
 
-type WSStream = async_tungstenite::WebSocketStream<
-    async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
->;
+type WSStream = async_tungstenite::WebSocketStream<TcpStream>;
 
 macro_rules! eat_error_and_blow {
     ($l:expr, $e:expr) => {

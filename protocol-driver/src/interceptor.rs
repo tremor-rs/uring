@@ -15,7 +15,7 @@
 use crate::{
     DriverErrorType, HandlerInboundChannelReceiver, HandlerInboundChannelSender,
     HandlerInboundMessage, HandlerOutboundChannelReceiver, HandlerOutboundChannelSender,
-    HandlerOutboundMessage,
+    HandlerOutboundMessage, JsonReply,
 };
 use async_trait::async_trait;
 use futures::channel::mpsc::{channel, SendError};
@@ -27,8 +27,17 @@ use uring_common::RequestId;
 pub trait Intercept {
     async fn inbound(&mut self, msg: HandlerInboundMessage) -> Reply;
     async fn outbound(&mut self, id: RequestId, data: Vec<u8>) -> Result<Vec<u8>, DriverErrorType> {
+        if let Some(rid) = self.result_id_map(id) {
+            let data = serde_json::from_slice(&data).unwrap();
+            Ok(serde_json::to_vec(&JsonReply { rid, data }).unwrap())
+        } else {
+            Ok(data)
+        }
+    }
+
+    fn result_id_map(&mut self, id: RequestId) -> Option<RequestId> {
         let _id = id;
-        Ok(data)
+        None
     }
 }
 
@@ -61,7 +70,7 @@ pub enum Reply {
 
 impl<T> Interceptor<T>
 where
-    T: Intercept,
+    T: Intercept + Send,
 {
     pub fn new(handler: T) -> Self {
         let (tx, rx) = channel(64);
@@ -105,7 +114,20 @@ where
         }
         Ok(())
     }
-    async fn outbound_handler(&mut self, msg: HandlerOutboundMessage) -> Result<(), SendError> {
+
+    async fn outbound_handler(&mut self, mut msg: HandlerOutboundMessage) -> Result<(), SendError> {
+        let msg = if msg.is_err() {
+            msg
+        } else {
+            match self.handler.outbound(msg.id, msg.data.unwrap()).await {
+                Ok(data) => {
+                    msg.data = Ok(data);
+                    msg
+                }
+                Err(e) => HandlerOutboundMessage::error(msg.id, e, "Interceptor failed"),
+            }
+        };
+
         if msg.close {
             if let Some(mut tx) = self.pending.remove(&msg.id) {
                 tx.send(msg).await
@@ -124,6 +146,7 @@ where
             }
         }
     }
+
     async fn inbound_handler(&mut self, mut msg: HandlerInboundMessage) -> Result<(), SendError> {
         let id = msg.id;
         let mut outbound_channel = msg.outbound_channel;

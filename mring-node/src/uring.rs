@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::vnode::Task;
-use async_tungstenite::connect_async;
+use async_tungstenite::async_std::connect_async;
 use futures::channel::mpsc::Sender;
 use futures::{select, FutureExt, SinkExt, StreamExt};
 use slog::Logger;

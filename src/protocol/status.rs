@@ -14,16 +14,19 @@
 
 use crate::service::status;
 use async_trait::async_trait;
-use protocol_driver::{interceptor, DriverErrorType, HandlerInboundMessage};
+use protocol_driver::{interceptor, DriverErrorType, HandlerInboundMessage, RequestId};
 use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Deserialize, Serialize, Debug)]
 enum Request {
-    Get,
+    Get { rid: RequestId },
 }
 
 #[derive(Default)]
-pub struct Handler {}
+pub struct Handler {
+    ids: HashMap<RequestId, RequestId>,
+}
 
 #[async_trait]
 impl interceptor::Intercept for Handler {
@@ -31,16 +34,22 @@ impl interceptor::Intercept for Handler {
         use status::Event;
         msg.service_id = Some(status::ID);
         msg.data = match dbg!(serde_json::from_slice(&msg.data)) {
-            Ok(Request::Get) => Event::get(),
+            Ok(Request::Get { rid }) => {
+                self.ids.insert(msg.id, rid);
+                Event::get()
+            }
             Err(_) => return interceptor::Reply::Err(DriverErrorType::BadInput),
         };
         interceptor::Reply::Ok(msg)
+    }
+
+    fn result_id_map(&mut self, id: RequestId) -> Option<RequestId> {
+        self.ids.remove(&id)
     }
 }
 
 /*
 {"Connect": ["status"]}
 {"Select": "status"}
-
-"Get"
+{"Get": {"rid":42}}
 */

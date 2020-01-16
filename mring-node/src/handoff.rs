@@ -17,16 +17,14 @@ use async_std::net::SocketAddr;
 use async_std::net::ToSocketAddrs;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
-use async_tungstenite::connect_async;
+use async_tungstenite::async_std::connect_async;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::{SinkExt, StreamExt};
 use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use tungstenite::protocol::Message as TungstenMessage;
 
-type WSStream = async_tungstenite::WebSocketStream<
-    async_tungstenite::stream::Stream<TcpStream, async_tls::client::TlsStream<TcpStream>>,
->;
+type WSStream = async_tungstenite::WebSocketStream<TcpStream>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum Direction {

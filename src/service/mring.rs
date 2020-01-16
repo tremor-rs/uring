@@ -140,11 +140,8 @@ where
                     ));
                 }
 
-                let mut data = vec![0; 8];
-                {
-                    let mut data = Cursor::new(&mut data[..]);
-                    data.put_u64_be(size);
-                }
+                let mut data: Vec<u8> = vec![0; 8];
+                data.put_u64(size);
                 storage.put(mring::ID.0 as u16, RING_SIZE, &data).await;
 
                 pubsub

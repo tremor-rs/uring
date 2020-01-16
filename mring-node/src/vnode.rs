@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::handoff;
-use async_std::net::TcpStream;
 use async_std::task;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::{select, FutureExt, SinkExt, StreamExt};
@@ -21,7 +20,6 @@ use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
 use std::time::Duration;
-use tungstenite::protocol::Message as TungstenMessage;
 use uring_common::MRingNodes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

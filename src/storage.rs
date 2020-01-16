@@ -16,12 +16,14 @@
 
 use crate::NodeId;
 use async_trait::async_trait;
+use bytes::buf::BufMut;
 use protobuf::Message;
 use raft::prelude::*;
 pub use raft::storage::Storage as ReadStorage;
 use raft::{Error as RaftError, Result as RaftResult, StorageError};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Borrow;
+use std::io::Write;
 
 #[async_trait]
 pub trait Storage: WriteStorage + ReadStorage {
@@ -298,7 +300,7 @@ impl WriteStorage for URRocksStorage {
         for entry in entries {
             let key = make_log_key(entry.index);
             let data = entry.write_to_bytes()?;
-            batch.put(&key, &data).unwrap();
+            batch.put(&key, &data);
         }
         self.backend.write(batch).unwrap();
         self.backend.flush().unwrap();
@@ -483,13 +485,11 @@ const LOW_INDEX: [u8; 16] = [RAFT_PREFIX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 
 const LOW_DATA: [u8; 8] = [DATA_PREFIX, 0, 0, 0, 0, 0, 0, 0];
 const HIGH_DATA: [u8; 8] = [DATA_PREFIX, 0, 0, 0, 255, 255, 255, 255];
-fn make_log_key(idx: u64) -> [u8; 16] {
-    use bytes::BufMut;
-    use std::io::Cursor;
-    let mut key = [0; 16];
+fn make_log_key(idx: u64) -> Vec<u8> {
+    let mut key: Vec<u8> = vec![0; 16];
 
     {
-        let mut key = Cursor::new(&mut key[..]);
+        // let mut key = Cursor::new(&mut key[..]);
         key.put_u64_le(RAFT_PREFIX as u64);
         key.put_u64_le(idx);
     }
@@ -498,12 +498,9 @@ fn make_log_key(idx: u64) -> [u8; 16] {
 }
 
 fn make_data_key(prefix: u16, key_s: &[u8]) -> Vec<u8> {
-    use bytes::BufMut;
-    use std::io::{Cursor, Write};
     let mut key = vec![0; 8 + key_s.len()];
 
     {
-        let mut key = Cursor::new(&mut key[..]);
         key.put_u32_le(DATA_PREFIX as u32);
         key.put_u32_le(prefix as u32);
         key.write_all(key_s).unwrap();

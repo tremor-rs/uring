@@ -149,7 +149,25 @@ pub struct HandlerOutboundMessage {
     pub id: RequestId,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct JsonReply {
+    pub rid: RequestId,
+    pub data: serde_json::Value,
+}
+
 impl HandlerOutboundMessage {
+    pub fn is_err(&self) -> bool {
+        if let DriverOutboundData::Err(_) = self.data {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        !self.is_err()
+    }
+
     pub fn ok(id: RequestId, data: Vec<u8>) -> Self {
         Self {
             id,

@@ -21,24 +21,26 @@ use crate::NodeId;
 use futures::channel::mpsc::{channel, Receiver, TrySendError};
 use http::StatusCode;
 use serde::Serialize;
-use tide::{IntoResponse, Request, Response, ResultExt};
+use tide::{ParamError, Request, Response};
 
 #[derive(Debug)]
 pub enum Error {
     HTTP(StatusCode),
     Tide(tide::Error),
     JSON(serde_json::Error),
+    Param(String),
     SendError,
 }
-impl IntoResponse for Error {
-    fn into_response(self) -> Response {
+impl Into<Response> for Error {
+    fn into(self) -> Response {
         match self {
             Self::HTTP(code) => response_json(code.as_u16(), code.canonical_reason()).unwrap(),
             Self::SendError => {
                 response_json(505, "Internal communication to raft core failed").unwrap()
             }
             Self::JSON(e) => response_json(400, format!("Invalid JSON: {}", e)).unwrap(),
-            Self::Tide(e) => e.into_response(),
+            Self::Param(e) => response_json(400, format!("Invalid Param: {}", e)).unwrap(),
+            Self::Tide(e) => e.into(),
         }
     }
 }
@@ -67,11 +69,11 @@ impl<T> From<TrySendError<T>> for Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn unerror(r: Result<Response>) -> Response {
-    match r {
+fn unerror(r: Result<Response>) -> tide::Result {
+    Ok(match r {
         Ok(r) => r,
-        Err(e) => e.into_response(),
-    }
+        Err(e) => e.into(),
+    })
 }
 
 fn reply(tx: Sender<WsMessage>) -> Reply {
@@ -90,7 +92,9 @@ async fn request(cx: Request<Node>, req: UrMsg, mut rx: Receiver<WsMessage>) -> 
 }
 
 fn response_json<S: Serialize>(c: u16, v: S) -> Result<Response> {
-    Ok(Response::new(c).body_json(&v)?)
+    let mut r = Response::new(c);
+    r.set_body(serde_json::to_vec(&v)?);
+    Ok(r)
 }
 
 fn response_json_200<S: Serialize>(v: S) -> Result<Response> {
@@ -107,9 +111,12 @@ async fn status(cx: Request<Node>) -> Result<Response> {
     request(cx, UrMsg::Status(RequestId(666), tx), rx).await
 }
 
+fn param_err<T: std::fmt::Debug>(e: ParamError<T>) -> Error {
+    Error::Param(format!("{:?}", e))
+}
 async fn uring_get(cx: Request<Node>) -> Result<Response> {
     let (tx, mut rx) = channel(crate::CHANNEL_SIZE);
-    let id: u64 = cx.param("id").client_err()?;
+    let id: u64 = cx.param("id").map_err(param_err)?;
     cx.state()
         .tx
         .unbounded_send(UrMsg::GetNode(NodeId(id), tx))?;
@@ -122,7 +129,7 @@ async fn uring_get(cx: Request<Node>) -> Result<Response> {
 
 async fn uring_post(cx: Request<Node>) -> Result<Response> {
     let (tx, mut rx) = channel(crate::CHANNEL_SIZE);
-    let id: u64 = cx.param("id").client_err()?;
+    let id: u64 = cx.param("id").map_err(param_err)?;
     cx.state()
         .tx
         .unbounded_send(UrMsg::AddNode(NodeId(id), tx))?;

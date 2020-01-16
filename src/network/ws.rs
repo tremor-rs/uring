@@ -482,6 +482,7 @@ impl Network {
         driver.register_handler("kv", kv_interceptor.tx.clone());
         driver.register_handler("pubsub", ps_interceptor.tx.clone());
         driver.register_handler("status", status_interceptor.tx.clone());
+
         task::spawn(net_interceptor.run_loop());
         task::spawn(kv_interceptor.run_loop());
         task::spawn(ps_interceptor.run_loop());

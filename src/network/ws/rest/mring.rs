@@ -29,7 +29,7 @@ pub(crate) async fn get_size(cx: Request<Node>) -> Result<Response> {
 
 pub(crate) async fn set_size(mut cx: Request<Node>) -> Result<Response> {
     let (tx, rx) = channel(crate::CHANNEL_SIZE);
-    let body: MRingSize = cx.body_json().await.client_err()?;
+    let body: MRingSize = cx.body_json().await?;
     request(cx, UrMsg::MRingSetSize(body.size, reply(tx)), rx).await
 }
 
@@ -45,6 +45,6 @@ pub struct MRingNode {
 
 pub(crate) async fn add_node(mut cx: Request<Node>) -> Result<Response> {
     let (tx, rx) = channel(crate::CHANNEL_SIZE);
-    let body: MRingNode = cx.body_json().await.client_err()?;
+    let body: MRingNode = cx.body_json().await?;
     request(cx, UrMsg::MRingAddNode(body.node.clone(), reply(tx)), rx).await
 }
