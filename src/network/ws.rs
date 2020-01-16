@@ -466,9 +466,13 @@ impl Network {
 
         let net_handler = crate::protocol::network::Handler::new(tx.clone());
         let mut net_interceptor = protocol_driver::Interceptor::new(net_handler);
+
         let kv_handler = crate::protocol::kv::Handler::default();
         let mut kv_interceptor = protocol_driver::Interceptor::new(kv_handler);
         kv_interceptor.connect_next(&mut net_interceptor);
+        let status_handler = crate::protocol::status::Handler::default();
+        let mut status_interceptor = protocol_driver::Interceptor::new(status_handler);
+        status_interceptor.connect_next(&mut net_interceptor);
 
         let ps_handler = crate::protocol::pubsub::Handler::new(pubsub);
         let ps_interceptor = protocol_driver::Interceptor::new(ps_handler);
@@ -477,9 +481,11 @@ impl Network {
 
         driver.register_handler("kv", kv_interceptor.tx.clone());
         driver.register_handler("pubsub", ps_interceptor.tx.clone());
+        driver.register_handler("status", status_interceptor.tx.clone());
         task::spawn(net_interceptor.run_loop());
         task::spawn(kv_interceptor.run_loop());
         task::spawn(ps_interceptor.run_loop());
+        task::spawn(status_interceptor.run_loop());
 
         let driver_tx = driver.transport_tx.clone();
         task::spawn(driver.run_loop());
