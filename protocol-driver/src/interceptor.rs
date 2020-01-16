@@ -109,6 +109,7 @@ where
         if let Some(mut tx) = self.pending.remove(&msg.id) {
             tx.send(msg).await
         } else {
+            println!("No pending reply to send to");
             // TODO: handle error
             Ok(())
         }
