@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use protocol_driver::{interceptor, DriverErrorType, HandlerInboundMessage};
 use serde_derive::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 enum Request {
     Get {
         key: String,
@@ -44,7 +44,7 @@ impl interceptor::Intercept for Handler {
     async fn inbound(&mut self, mut msg: HandlerInboundMessage) -> interceptor::Reply {
         use kv::Event;
         msg.service_id = Some(kv::ID);
-        msg.data = match serde_json::from_slice(&msg.data) {
+        msg.data = match dbg!(serde_json::from_slice(&msg.data)) {
             Ok(Request::Get { key }) => Event::get(key.into_bytes()),
             Ok(Request::Put { key, store }) => Event::put(key.into_bytes(), store.into_bytes()),
             Ok(Request::Delete { key }) => Event::delete(key.into_bytes()),
@@ -58,3 +58,10 @@ impl interceptor::Intercept for Handler {
         interceptor::Reply::Ok(msg)
     }
 }
+
+/*
+ {"Connect": ["kv"]}
+ {"Select": "kv"}
+ {"Put": {"key": "snot", "store": "badger"}}
+ {"Get": {"key": "snot"}}
+*/

@@ -25,7 +25,7 @@ pub use interceptor::*;
 
 pub type CustomProtocol = String;
 
-#[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Debug)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Protocol {
     Connect,
     None,
@@ -41,7 +41,13 @@ pub enum DriverInboundData {
     Disconnect,
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug)]
+pub enum DriverInboundReply {
+    Connected(Vec<CustomProtocol>),
+    Selected(CustomProtocol),
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug)]
 pub enum DriverErrorType {
     SystemError,  // 500
     LogicalError, // 412
@@ -52,7 +58,7 @@ pub enum DriverErrorType {
     InvalidRequest,
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug)]
 pub struct DriverError {
     pub error: DriverErrorType,
     pub message: String,
@@ -77,7 +83,7 @@ impl Default for ClientConnection {
     }
 }
 
-#[derive(Hash, PartialEq, Eq, Clone, Copy)]
+#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub struct MessageId {
     client: ClientId,
     correlation: CorrelationId,
@@ -99,6 +105,7 @@ pub struct DriverInboundMessage {
 pub type DriverInboundChannelReceiver = Receiver<DriverInboundMessage>;
 pub type DriverInboundChannelSender = Sender<DriverInboundMessage>;
 
+#[derive(Debug)]
 pub struct DriverOutboundMessage {
     pub data: DriverOutboundData,
     pub id: MessageId,
@@ -135,6 +142,7 @@ pub struct HandlerInboundMessage {
     pub id: RequestId,
 }
 
+#[derive(Debug)]
 pub struct HandlerOutboundMessage {
     pub data: HandlerOutboundData,
     pub id: RequestId,
@@ -208,6 +216,7 @@ impl Driver {
                     if let Some(msg) = msg {
                         self.inbound_handler(msg).await?;
                     } else {
+                        println!("failed to read transport message");
                         // ARGH! errro
                         break;
                     };
@@ -216,6 +225,7 @@ impl Driver {
                     if let Some(msg) = msg {
                         self.outbound_handler(msg).await?;
                     } else {
+                        println!("failed to read handler message");
                         // ARGH! errro
                         break;
                     };
@@ -231,8 +241,10 @@ impl Driver {
 
         if let Some((id, mut transport)) = self.pending.remove(&id) {
             let msg = DriverOutboundMessage { id, data };
-            transport.send(msg).await?;
-        };
+            transport.send(dbg!(msg)).await?;
+        } else {
+            println!("No outbound destiation")
+        }
 
         Ok(())
     }
@@ -245,14 +257,16 @@ impl Driver {
             mut outbound_channel,
         } = msg;
         let client = self.clients.entry(id.client).or_default();
-        let keep_client = match (&client.protocol, &data) {
+        let keep_client = match dbg!((&client.protocol, &data)) {
             // When we're in connect
             (Protocol::Connect, DriverInboundData::Connect(protos)) => {
                 //TODO: Validate protocols
                 client.protocol = Protocol::None;
                 client.enabled_protocols = protos.clone();
+                let reply = DriverInboundReply::Connected(client.enabled_protocols.clone());
+                let reply = serde_json::to_vec(&reply).unwrap();
                 outbound_channel
-                    .send(DriverOutboundMessage::ok(id, vec![]))
+                    .send(DriverOutboundMessage::ok(id, reply))
                     .await
                     .is_ok()
             }
@@ -296,9 +310,10 @@ impl Driver {
             | (Protocol::Custom(_), DriverInboundData::Select(proto)) => {
                 if client.enabled_protocols.contains(proto) {
                     client.protocol = Protocol::Custom(proto.clone());
-
+                    let reply = DriverInboundReply::Selected(proto.clone());
+                    let reply = serde_json::to_vec(&reply).unwrap();
                     outbound_channel
-                        .send(DriverOutboundMessage::ok(id, vec![]))
+                        .send(DriverOutboundMessage::ok(id, reply))
                         .await
                         .is_ok()
                 } else {

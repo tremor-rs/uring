@@ -60,23 +60,34 @@ impl Connection {
                     if let Some(msg) = msg {
                         self.handle_ws_msg(msg).await;
                     } else {
+                        dbg!("snot");
                         break
                     }
                 }
                 msg = self.rx.next() => {
                     if let Some(msg) = msg {
-                        match msg.data {
+                        match dbg!(msg.data) {
                             Ok(data) => {
-                                self.ws_tx.send(Message::Binary(data)).await.unwrap();
+                                self.ws_tx.send(Message::Text(String::from_utf8(data).unwrap())).await.unwrap();
                             },
-                            Err(e) => ()
+                            Err(e) => {
+                                let error = serde_json::to_string(&e).unwrap();
+                                println!("Something went wrong: {}", error);
+                                self.ws_tx.send(Message::Text(error)).await.unwrap();
+
+                            }
                         }
                     } else {
+                        dbg!("snot");
                         break
                     }
 
                 }
-                complete => break
+                complete => {
+                    dbg!("done");
+                    break
+
+                }
             };
         }
     }
@@ -135,7 +146,8 @@ pub(crate) async fn accept_connection<S>(
             }
             resp = response_rx.next() => {
                 if let Some(resp) = resp {
-                    ws_stream.send(resp).await.expect("Failed to send response");
+                    println!("we got here");
+                    ws_stream.send(dbg!(resp)).await.expect("Failed to send response");
                 } else {
                     error!(logger, "Client connection down.", );
                     break;
