@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.22"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "proc-macro2 1.0.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -673,7 +673,7 @@ name = "gdrl"
 version = "0.1.0"
 dependencies = [
  "async-std 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "async-trait 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-trait 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1935,7 +1935,7 @@ version = "0.1.0"
 dependencies = [
  "async-std 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-tls 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "async-trait 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-trait 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-tungstenite 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 1.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2197,7 +2197,7 @@ dependencies = [
 "checksum async-std 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "0bf6039b315300e057d198b9d3ab92ee029e31c759b7f1afae538145e6f18a3e"
 "checksum async-task 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "d22dc86693d375d2733b536fd8914bea0fa93adf4b1e6bcbd9c7c500cb62d920"
 "checksum async-tls 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)" = "6ce6977f57fa68da77ffe5542950d47e9c23d65f5bc7cb0a9f8700996913eec7"
-"checksum async-trait 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)" = "c8df72488e87761e772f14ae0c2480396810e51b2c2ade912f97f0f7e5b95e3c"
+"checksum async-trait 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)" = "750b1c38a1dfadd108da0f01c08f4cdc7ff1bb39b325f9c82cc972361780a6e1"
 "checksum async-tungstenite 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "69bf10199c5a8b9907374d544ea47bbf647f4e94a6a7a10d728c14d344bb4627"
 "checksum async-tungstenite 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "8dab29105044b4a928c2a5bc4f9a7f7c68f67617dc7f00ec587bc4be815c327f"
 "checksum atty 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)" = "d9b39be18770d11421cdb1b9947a45dd3f37e93092cbf377614828a319d5fee8"
