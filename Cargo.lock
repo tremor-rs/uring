@@ -1025,7 +1025,7 @@ dependencies = [
  "serde_json 1.0.53 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-async 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "slog-term 2.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog-term 2.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tungstenite 0.9.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "uring-common 0.1.0",
  "url 2.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1271,7 +1271,7 @@ dependencies = [
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-envlogger 2.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-stdlog 4.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "slog-term 2.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog-term 2.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1565,7 +1565,7 @@ dependencies = [
  "slog-async 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-scope 4.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-stdlog 4.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "slog-term 2.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog-term 2.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1602,7 +1602,7 @@ dependencies = [
 
 [[package]]
 name = "slog-term"
-version = "2.5.0"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "atty 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1971,7 +1971,7 @@ dependencies = [
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-async 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-json 2.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "slog-term 2.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog-term 2.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tide 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tungstenite 0.9.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "uring-common 0.1.0",
@@ -2385,7 +2385,7 @@ dependencies = [
 "checksum slog-json 2.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "ddc0d2aff1f8f325ef660d9a0eb6e6dcd20b30b3f581a5897f58bf42d061c37a"
 "checksum slog-scope 4.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "7c44c89dd8b0ae4537d1ae318353eaf7840b4869c536e31c41e963d1ea523ee6"
 "checksum slog-stdlog 4.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "be4d87903baf655da2d82bc3ac3f7ef43868c58bf712b3a661fda72009304c23"
-"checksum slog-term 2.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "124501187c410b6a46fe8a47a48435ae462fae4e02d03c558d358f40b17308cb"
+"checksum slog-term 2.6.0 (registry+https://github.com/rust-lang/crates.io-index)" = "bab1d807cf71129b05ce36914e1dbb6fbfbdecaf686301cb457f4fa967f9f5b6"
 "checksum smallvec 0.6.13 (registry+https://github.com/rust-lang/crates.io-index)" = "f7b0758c52e15a8b5e3691eae6cc559f08eee9406e548a4477ba4e67770a82b6"
 "checksum smallvec 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "44e59e0c9fa00817912ae6e4e6e3c4fe04455e75699d06eedc7d85917ed8e8f4"
 "checksum sourcefile 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "4bf77cb82ba8453b42b6ae1d692e4cdc92f9a47beaf89a847c8be83f4e328ad3"
