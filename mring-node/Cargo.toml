@@ -13,7 +13,7 @@ gdrl = { path = "../gdrl" }
 uring-common = { path = "../uring-common" }
 slog = { version = "2", features = ["max_level_info", "release_max_level_warn"] }
 
-async-tungstenite = "0.1.0"
+async-tungstenite = "0.7.1"
 async-std = {version="*", features = ["unstable"]}
 async-tls = "*"
 futures = "0.3"
