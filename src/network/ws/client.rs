@@ -41,7 +41,7 @@ macro_rules! eat_error_and_blow {
 pub(crate) struct Connection {
     //    my_id: u64,
     remote_id: NodeId,
-    master: UnboundedSender<UrMsg>,
+    handler: UnboundedSender<UrMsg>,
     tx: Sender<WsMessage>,
     rx: Receiver<WsMessage>,
     logger: Logger,
@@ -55,7 +55,7 @@ impl Connection {
         if self.handshake_done {
             if msg.is_binary() {
                 let msg = decode_ws(&msg.into_data());
-                self.master.unbounded_send(UrMsg::RaftMsg(msg)).unwrap();
+                self.handler.unbounded_send(UrMsg::RaftMsg(msg)).unwrap();
             } else if msg.is_text() {
                 let msg: CtrlMsg =
                     eat_error_and_blow!(self.logger, serde_json::from_slice(&msg.into_data()));
@@ -64,7 +64,7 @@ impl Connection {
                         self.remote_id = id;
                         eat_error_and_blow!(
                             self.logger,
-                            self.master
+                            self.handler
                                 .send(UrMsg::RegisterLocal(id, peer, self.tx.clone(), peers))
                                 .await
                         );
@@ -72,7 +72,8 @@ impl Connection {
                     CtrlMsg::AckProposal(pid, success) => {
                         eat_error_and_blow!(
                             self.logger,
-                            self.master.unbounded_send(UrMsg::AckProposal(pid, success))
+                            self.handler
+                                .unbounded_send(UrMsg::AckProposal(pid, success))
                         );
                     }
                     _ => (),
@@ -92,7 +93,7 @@ impl Connection {
                         protocol: Protocol::URing,
                     } => {
                         self.handshake_done = true;
-                        self.master
+                        self.handler
                             .unbounded_send(UrMsg::InitLocal(self.tx.clone()))
                             .unwrap();
                     }
@@ -143,7 +144,7 @@ impl Connection {
 async fn worker(
     logger: Logger,
     endpoint: String,
-    master: UnboundedSender<UrMsg>,
+    handler: UnboundedSender<UrMsg>,
 ) -> std::io::Result<()> {
     let url = url::Url::parse(&format!("ws://{}", endpoint)).unwrap();
     loop {
@@ -168,7 +169,7 @@ async fn worker(
         let mut c = Connection {
             logger,
             remote_id: NodeId(0),
-            master: master.clone(),
+            handler: handler.clone(),
             ws_stream,
             handshake_done: false,
             rx,
@@ -196,7 +197,7 @@ async fn worker(
                 break;
             }
         }
-        c.master
+        c.handler
             .unbounded_send(UrMsg::DownLocal(c.remote_id))
             .unwrap();
     }
@@ -206,8 +207,8 @@ async fn worker(
 
 pub(crate) async fn remote_endpoint(
     endpoint: String,
-    master: UnboundedSender<UrMsg>,
+    handler: UnboundedSender<UrMsg>,
     logger: Logger,
 ) -> std::io::Result<()> {
-    worker(logger, endpoint, master).await
+    worker(logger, endpoint, handler).await
 }

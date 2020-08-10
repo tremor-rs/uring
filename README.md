@@ -4,7 +4,7 @@
 [Quality Checks]: https://github.com/wayfair-incubator/uring/workflows/Checks/badge.svg
 [License Checks]: https://github.com/wayfair-incubator/uring/workflows/License%20audit/badge.svg
 [Security Checks]: https://github.com/wayfair-incubator/uring/workflows/Security%20audit/badge.svg
-[Code Coverage]: https://codecov.io/gh/wayfair-incubator/uring/branch/master/graph/badge.svg
+[Code Coverage]: https://codecov.io/gh/wayfair-incubator/uring/branch/main/graph/badge.svg
 [codecov.io]: https://codecov.io/gh/wayfair-incubator/uring
 
 **RAFT spike based on the raft-rs framework that powers tikv/tidb to evaluate adopting raft-rs.**
