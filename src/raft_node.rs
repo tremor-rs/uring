@@ -529,7 +529,7 @@ where
 
         // Persistent raft logs. It's necessary because in `RawNode::advance` we stabilize
         // raft logs to the latest position.
-        if let Err(e) = self.append(ready.entries()).await {
+        if let Err(e) = self.append(ready.entries().as_slice()).await {
             println!("persist raft log fail: {:?}, need to retry or panic", e);
             return Err(e);
         }

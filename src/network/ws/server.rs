@@ -155,7 +155,7 @@ impl Connection {
             }
         } else if msg.is_binary() {
             let bin = msg.into_data();
-            let msg = decode_ws(&bin);
+            let msg = decode_ws(bin);
             self.node.tx.unbounded_send(UrMsg::RaftMsg(msg)).is_ok()
         } else {
             true

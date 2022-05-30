@@ -15,13 +15,15 @@
 
 mod kv;
 mod mring;
+use std::num::ParseIntError;
+
 use super::Node;
 use super::*;
 use crate::NodeId;
 use futures::channel::mpsc::{channel, Receiver, TrySendError};
 use http::StatusCode;
 use serde::Serialize;
-use tide::{ParamError, Request, Response};
+use tide::{Error as ParamError, Request, Response};
 
 #[derive(Debug)]
 pub enum Error {
@@ -29,22 +31,29 @@ pub enum Error {
     Tide(tide::Error),
     JSON(serde_json::Error),
     Param(String),
+    ParseInt(ParseIntError),
     SendError,
 }
 impl Into<Response> for Error {
     fn into(self) -> Response {
         match self {
-            Self::HTTP(code) => response_json(code.as_u16(), code.canonical_reason()).unwrap(),
-            Self::SendError => {
+            Error::HTTP(code) => response_json(code.as_u16(), code.canonical_reason()).unwrap(),
+            Error::SendError => {
                 response_json(505, "Internal communication to raft core failed").unwrap()
             }
-            Self::JSON(e) => response_json(400, format!("Invalid JSON: {}", e)).unwrap(),
-            Self::Param(e) => response_json(400, format!("Invalid Param: {}", e)).unwrap(),
-            Self::Tide(e) => e.into(),
+            Error::JSON(e) => response_json(400, format!("Invalid JSON: {}", e)).unwrap(),
+            Error::Param(e) => response_json(400, format!("Invalid Param: {}", e)).unwrap(),
+            Error::Tide(e) => e.into(),
+            Error::ParseInt(e) => response_json(400, format!("Invalid Integer: {}", e)).unwrap(),
         }
     }
 }
 
+impl From<ParseIntError> for Error {
+    fn from(s: ParseIntError) -> Self {
+        Self::ParseInt(s)
+    }
+}
 impl From<StatusCode> for Error {
     fn from(s: StatusCode) -> Self {
         Self::HTTP(s)
@@ -111,12 +120,12 @@ async fn status(cx: Request<Node>) -> Result<Response> {
     request(cx, UrMsg::Status(RequestId(666), tx), rx).await
 }
 
-fn param_err<T: std::fmt::Debug>(e: ParamError<T>) -> Error {
+pub(crate) fn param_err(e: ParamError) -> Error {
     Error::Param(format!("{:?}", e))
 }
 async fn uring_get(cx: Request<Node>) -> Result<Response> {
     let (tx, mut rx) = channel(crate::CHANNEL_SIZE);
-    let id: u64 = cx.param("id").map_err(param_err)?;
+    let id: u64 = cx.param("id").map_err(param_err)?.parse()?;
     cx.state()
         .tx
         .unbounded_send(UrMsg::GetNode(NodeId(id), tx))?;
@@ -129,7 +138,7 @@ async fn uring_get(cx: Request<Node>) -> Result<Response> {
 
 async fn uring_post(cx: Request<Node>) -> Result<Response> {
     let (tx, mut rx) = channel(crate::CHANNEL_SIZE);
-    let id: u64 = cx.param("id").map_err(param_err)?;
+    let id: u64 = cx.param("id").map_err(param_err)?.parse()?;
     cx.state()
         .tx
         .unbounded_send(UrMsg::AddNode(NodeId(id), tx))?;

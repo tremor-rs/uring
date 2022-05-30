@@ -31,7 +31,7 @@ use raft::eraftpb::Message as RaftMessage;
 use serde_derive::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Cursor};
 use ws_proto::Reply as ProtoReply;
 
 type LocalMailboxes = HashMap<NodeId, Sender<WsMessage>>;
@@ -403,31 +403,21 @@ impl From<ws_proto::Reply> for WsMessage {
     }
 }
 
-#[cfg(feature = "json-proto")]
-fn decode_ws(bin: &[u8]) -> RaftMessage {
-    let msg: crate::codec::json::Event = serde_json::from_slice(bin).unwrap();
-    msg.into()
-}
-
-#[cfg(not(feature = "json-proto"))]
-fn decode_ws(bin: &[u8]) -> RaftMessage {
-    use protobuf::Message;
+use protobuf::{CodedInputStream, CodedOutputStream, Message};
+fn decode_ws(bin: Vec<u8>) -> RaftMessage {
     let mut msg = RaftMessage::default();
-    msg.merge_from_bytes(bin).unwrap();
+    let mut c = Cursor::new(bin);
+    let mut is = CodedInputStream::new(&mut c);
+    msg.merge_from(&mut is).unwrap();
     msg
 }
 
-#[cfg(feature = "json-proto")]
 fn encode_ws(msg: RaftMessage) -> Bytes {
-    let data: crate::codec::json::Event = msg.clone().into();
-    let data = serde_json::to_string_pretty(&data);
-    data.unwrap().into()
-}
+    let mut bs = Vec::new();
+    let mut os = CodedOutputStream::new(&mut bs);
 
-#[cfg(not(feature = "json-proto"))]
-fn encode_ws(msg: RaftMessage) -> Bytes {
-    use protobuf::Message;
-    msg.write_to_bytes().unwrap().into()
+    msg.write_to_with_cached_sizes(&mut os).unwrap();
+    bs.into()
 }
 
 impl Network {

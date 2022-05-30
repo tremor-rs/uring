@@ -52,7 +52,7 @@ impl Connection {
     async fn handle(&mut self, msg: Message) -> bool {
         if self.handshake_done {
             if msg.is_binary() {
-                let msg = decode_ws(&msg.into_data());
+                let msg = decode_ws(msg.into_data());
                 self.handler.unbounded_send(UrMsg::RaftMsg(msg)).unwrap();
             } else if msg.is_text() {
                 let msg: CtrlMsg =

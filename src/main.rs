@@ -14,7 +14,6 @@
 
 #![recursion_limit = "2048"]
 
-mod codec;
 #[allow(unused)]
 pub mod errors;
 pub mod network;

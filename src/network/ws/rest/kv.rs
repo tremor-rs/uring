@@ -13,17 +13,14 @@
 // limitations under the License.
 // use crate::{NodeId, KV};
 
+use super::rest::param_err;
 use super::*;
 use futures::channel::mpsc::channel;
 use tide::{Request, Response};
 
-fn param_err<T: std::fmt::Debug>(e: ParamError<T>) -> Error {
-    Error::Param(format!("{:?}", e))
-}
-
 pub(crate) async fn get(cx: Request<Node>) -> Result<Response> {
     let (tx, rx) = channel(crate::CHANNEL_SIZE);
-    let key: String = cx.param("id").map_err(param_err)?;
+    let key: String = cx.param("id").map_err(param_err)?.to_string();
     let id = key.clone().into_bytes();
     info!(cx.state().logger, "GET /kv/{}", key);
     request(cx, UrMsg::Get(id.clone(), reply(tx)), rx).await
@@ -36,7 +33,7 @@ struct PostBody {
 
 pub(crate) async fn post(mut cx: Request<Node>) -> Result<Response> {
     let (tx, rx) = channel(crate::CHANNEL_SIZE);
-    let key: String = cx.param("id").map_err(param_err)?;
+    let key = cx.param("id").map_err(param_err)?.to_string();
     let id = key.clone().into_bytes();
     let body: PostBody = cx.body_json().await?;
     info!(cx.state().logger, "POST /kv/{} -> {}", key, body.value);
@@ -56,7 +53,7 @@ struct CasBody {
 
 pub(crate) async fn cas(mut cx: Request<Node>) -> Result<Response> {
     let (tx, rx) = channel(crate::CHANNEL_SIZE);
-    let id: String = cx.param("id").map_err(param_err)?;
+    let id: String = cx.param("id").map_err(param_err)?.to_string();
     let id = id.into_bytes();
     let body: CasBody = cx.body_json().await?;
 
@@ -75,7 +72,7 @@ pub(crate) async fn cas(mut cx: Request<Node>) -> Result<Response> {
 
 pub(crate) async fn delete(cx: Request<Node>) -> Result<Response> {
     let (tx, rx) = channel(crate::CHANNEL_SIZE);
-    let key: String = cx.param("id").map_err(param_err)?;
+    let key: String = cx.param("id").map_err(param_err)?.to_string();
     let id = key.clone().into_bytes();
     request(cx, UrMsg::Delete(id.clone(), reply(tx)), rx).await
 }
