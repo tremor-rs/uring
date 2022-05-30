@@ -29,7 +29,7 @@ macro_rules! eat_error_and_blow {
         match $e {
             Err(e) => {
                 error!($l, "[WS Error] {}", e);
-                panic!(format!("{}: {:?}", e, e));
+                panic!("{}: {:?}", e, e);
             }
             Ok(v) => v,
         }

@@ -142,8 +142,8 @@ impl From<&eraftpb::Entry> for Entry {
             kind: other.entry_type.into(),
             term: other.term,
             index: other.index,
-            data: other.data.clone(),
-            context: other.context.clone(),
+            data: other.data.clone().to_vec(),
+            context: other.context.clone().to_vec(),
         }
     }
 }
@@ -154,8 +154,8 @@ impl Into<eraftpb::Entry> for &Entry {
         entry.entry_type = self.kind.clone().into();
         entry.term = self.term;
         entry.index = self.index;
-        entry.data = self.data.clone();
-        entry.context = self.context.clone();
+        entry.data = self.data.clone().into();
+        entry.context = self.context.clone().into();
         entry
     }
 }
@@ -170,7 +170,7 @@ impl Model for Snapshot {}
 impl From<eraftpb::Snapshot> for Snapshot {
     fn from(other: eraftpb::Snapshot) -> Snapshot {
         Snapshot {
-            data: other.data,
+            data: other.data.to_vec(),
             meta: match other.metadata.into_option() {
                 Some(v) => Some(v.into()),
                 None => None,
@@ -183,7 +183,7 @@ impl Into<eraftpb::Snapshot> for Snapshot {
     fn into(self) -> eraftpb::Snapshot {
         use protobuf::SingularPtrField;
         let mut entry = eraftpb::Snapshot::default();
-        entry.data = self.data;
+        entry.data = self.data.into();
         entry.metadata = match self.meta {
             Some(value) => SingularPtrField::some(value.into()),
             None => SingularPtrField::none(),
@@ -262,7 +262,7 @@ impl From<eraftpb::Message> for Event {
             request_snapshot: other.request_snapshot,
             reject: other.reject,
             reject_hint: other.reject_hint,
-            context: other.context,
+            context: other.context.to_vec(),
             entries: other.entries.iter().map(|e| e.into()).collect(),
         }
     }
@@ -286,7 +286,7 @@ impl Into<eraftpb::Message> for Event {
         entry.request_snapshot = self.request_snapshot;
         entry.reject = self.reject;
         entry.reject_hint = self.reject_hint;
-        entry.context = self.context;
+        entry.context = self.context.into();
         entry.entries = RepeatedField::<eraftpb::Entry>::from_vec(
             self.entries.iter().map(|e| e.into()).collect(),
         );
@@ -447,8 +447,8 @@ mod tests {
         let mut pb = eraftpb::Entry::default();
         pb.term = 1;
         pb.index = 2;
-        pb.data = vec![3u8];
-        pb.context = vec![4u8];
+        pb.data = vec![3u8].into();
+        pb.context = vec![4u8].into();
 
         let json: Entry = (&pb).into();
         assert_eq!(json.term, 1);

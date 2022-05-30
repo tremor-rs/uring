@@ -11,15 +11,18 @@ members = ["ws-proto", "uring-common", "mring-node", "gdrl", "protocol-driver"]
 
 [dependencies]
 
-ws-proto = {path = "ws-proto"}
-uring-common = {path = "uring-common"}
-gdrl = {path = "gdrl"}
-protocol-driver = {path = "protocol-driver"}
+ws-proto = { path = "ws-proto" }
+uring-common = { path = "uring-common" }
+gdrl = { path = "gdrl" }
+protocol-driver = { path = "protocol-driver" }
 
 raft = "0.6.0-alpha"
 rocksdb = "0.14"
 #slog = "2"
-slog = { version = "2", features = ["max_level_info", "release_max_level_warn"] }
+slog = { version = "2", features = [
+    "max_level_info",
+    "release_max_level_warn",
+] }
 slog-json = "2"
 
 slog-term = "*"
@@ -39,7 +42,7 @@ protobuf = "2"
 url = "*"
 
 async-tungstenite = { version = "0.8", features = ["async-std-runtime"] }
-async-std = {version="*", features = ["unstable"]}
+async-std = { version = "*", features = ["unstable"] }
 async-tls = "*"
 futures = "0.3"
 async-trait = "0.1"
@@ -53,7 +56,7 @@ version = "0.11"
 default-features = false
 
 [patch.crates-io]
-raft = { git = 'https://github.com/tikv/raft-rs' }
+#raft = { git = 'https://github.com/tikv/raft-rs' }
 #hyper = { git = 'https://github.com/hyperium/hyper' }
 #tide = { git = 'https://github.com/http-rs/tide' }
 

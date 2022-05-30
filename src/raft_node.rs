@@ -159,7 +159,7 @@ where
                             reply.send(WsMessage::Reply(200, ws_proto::Reply { code: 200, rid, data: serde_json::to_value(self.version()).unwrap() })).await.unwrap();
                         }
                         RaftNetworkMsg::Event(eid, sid, data) => {
-                            if let Some(mut service) = self.services.get_mut(&sid) {
+                            if let Some(service) = self.services.get_mut(&sid) {
                                 if service.is_local(&data).unwrap() {
                                     let (code, value) = service.execute(raft, &mut self.pubsub, data).await.unwrap();
                                     self.network.event_reply(eid, code, value).await.unwrap();
@@ -193,7 +193,7 @@ where
                                     self.proposals.push_back(proposal)
                                 }
                             }
-                            if let Some(eid) = self.pending_acks.remove(&pid) {
+                            if let Some(_eid) = self.pending_acks.remove(&pid) {
                                 //self.network.event_reply(eid, Some(vec![skilled])).await.unwrap();
                             }
                         }
@@ -211,7 +211,7 @@ where
                         }
                     }
                 },
-                tick = ticks.next().fuse() => {
+                _tick = ticks.next().fuse() => {
                     if !self.is_running() {
                         continue
                     }
@@ -519,7 +519,7 @@ where
         }
 
         // Get the `Ready` with `RawNode::ready` interface.
-        let mut ready = self
+        let ready = self
             .raft_group
             .as_mut()
             .unwrap()
@@ -544,99 +544,98 @@ where
         }
 
         // Send out the messages come from the node.
-        for msg in ready.messages.drain(..) {
-            self.network.send_msg(msg).await.unwrap()
+        for msg in ready.messages() {
+            self.network.send_msg(msg.clone()).await.unwrap()
         }
 
         // Apply all committed proposals.
-        if let Some(committed_entries) = ready.committed_entries.take() {
-            for entry in &committed_entries {
-                if entry.data.is_empty() {
-                    // From new elected leaders.
-                    continue;
-                }
-                if let EntryType::EntryConfChange = entry.get_entry_type() {
-                    // For conf change messages, make them effective.
-                    let mut cc = ConfChange::default();
-                    cc.merge_from_bytes(&entry.data).unwrap();
-                    let _node_id = cc.node_id;
+        for entry in ready.committed_entries() {
+            if entry.data.is_empty() {
+                // From new elected leaders.
+                continue;
+            }
+            if let EntryType::EntryConfChange = entry.get_entry_type() {
+                // For conf change messages, make them effective.
+                let mut cc = ConfChange::default();
+                cc.merge_from_bytes(&entry.data).unwrap();
+                let _node_id = cc.node_id;
 
-                    let cs: ConfState = self
-                        .raft_group
-                        .as_mut()
-                        .unwrap()
-                        .try_lock()
-                        .unwrap()
-                        .apply_conf_change(&cc)
-                        .unwrap();
-                    self.set_conf_state(cs).await?;
-                } else {
-                    // For normal proposals, extract the key-value pair and then
-                    // insert them into the kv engine.
-                    if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
-                        if let Some(service) = self.services.get_mut(&event.sid) {
-                            // let _store = &self
-                            //     .raft_group
-                            //     .as_ref()
-                            //     .unwrap()
-                            //     .lock()
-                            //     .await
-                            //     .raft
-                            //     .raft_log
-                            //     .store;
-                            let (code, value) = service
-                                .execute(
-                                    self.raft_group.as_ref().unwrap(),
-                                    &mut self.pubsub,
-                                    event.data,
-                                )
-                                .await
-                                .unwrap();
-                            if event.nid == Some(self.id) {
-                                self.network
-                                    .event_reply(event.eid, code, value)
-                                    .await
-                                    .unwrap();
-                            }
-                        }
-                    }
-                }
-                if self
+                let cs: ConfState = self
                     .raft_group
-                    .as_ref()
+                    .as_mut()
                     .unwrap()
                     .try_lock()
                     .unwrap()
-                    .raft
-                    .state
-                    == StateRole::Leader
-                {
-                    // The leader should response to the clients, tell them if their proposals
-                    // succeeded or not.
-                    if let Some(proposal) = self.proposals.pop_front() {
-                        if proposal.proposer == self.id {
-                            info!(self.logger, "Handling proposal(local)"; "proposal-id" => proposal.id);
-                            self.pending_proposals.remove(&proposal.id);
-                        } else {
-                            info!(self.logger, "Handling proposal(remote)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
+                    .apply_conf_change(&cc)
+                    .unwrap();
+                self.set_conf_state(cs).await?;
+            } else {
+                // For normal proposals, extract the key-value pair and then
+                // insert them into the kv engine.
+                if let Ok(event) = serde_json::from_slice::<Event>(&entry.data) {
+                    if let Some(service) = self.services.get_mut(&event.sid) {
+                        // let _store = &self
+                        //     .raft_group
+                        //     .as_ref()
+                        //     .unwrap()
+                        //     .lock()
+                        //     .await
+                        //     .raft
+                        //     .raft_log
+                        //     .store;
+                        let (code, value) = service
+                            .execute(
+                                self.raft_group.as_ref().unwrap(),
+                                &mut self.pubsub,
+                                event.data,
+                            )
+                            .await
+                            .unwrap();
+                        if event.nid == Some(self.id) {
                             self.network
-                                .ack_proposal(proposal.proposer, proposal.id, true)
+                                .event_reply(event.eid, code, value)
                                 .await
-                                .map_err(|e| {
-                                    Error::Io(IoError::new(
-                                        IoErrorKind::ConnectionAborted,
-                                        format!("{}", e),
-                                    ))
-                                })?;
+                                .unwrap();
                         }
                     }
                 }
             }
-            if let Some(last_committed) = committed_entries.last() {
-                self.set_hard_state(last_committed.index, last_committed.term)
-                    .await?;
+            if self
+                .raft_group
+                .as_ref()
+                .unwrap()
+                .try_lock()
+                .unwrap()
+                .raft
+                .state
+                == StateRole::Leader
+            {
+                // The leader should response to the clients, tell them if their proposals
+                // succeeded or not.
+                if let Some(proposal) = self.proposals.pop_front() {
+                    if proposal.proposer == self.id {
+                        info!(self.logger, "Handling proposal(local)"; "proposal-id" => proposal.id);
+                        self.pending_proposals.remove(&proposal.id);
+                    } else {
+                        info!(self.logger, "Handling proposal(remote)"; "proposal-id" => proposal.id, "proposer" => proposal.proposer);
+                        self.network
+                            .ack_proposal(proposal.proposer, proposal.id, true)
+                            .await
+                            .map_err(|e| {
+                                Error::Io(IoError::new(
+                                    IoErrorKind::ConnectionAborted,
+                                    format!("{}", e),
+                                ))
+                            })?;
+                    }
+                }
             }
         }
+        if let Some(last_committed) = ready.committed_entries().last() {
+            self.set_hard_state(last_committed.index, last_committed.term)
+                .await?;
+        }
+
         // Call `RawNode::advance` interface to update position flags in the raft.
         self.raft_group
             .as_mut()

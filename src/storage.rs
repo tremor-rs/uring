@@ -275,7 +275,7 @@ impl WriteStorage for URRocksStorage {
     }
     async fn apply_snapshot(&mut self, mut snapshot: Snapshot) -> RaftResult<()> {
         let mut meta = snapshot.take_metadata();
-        self.apply_data_snapshot(snapshot.take_data());
+        self.apply_data_snapshot(snapshot.take_data().to_vec());
         let term = meta.term;
         let index = meta.index;
 
@@ -445,7 +445,7 @@ impl ReadStorage for URRocksStorage {
         // Use the latest applied_idx to construct the snapshot.
         let applied_idx = hs.commit;
         let term = hs.term;
-        snapshot.set_data(self.data_snapshot());
+        snapshot.set_data(self.data_snapshot().into());
         let meta = snapshot.mut_metadata();
         meta.index = applied_idx;
         meta.term = term;
