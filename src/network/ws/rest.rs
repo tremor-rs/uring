@@ -176,7 +176,7 @@ pub(crate) async fn run(logger: Logger, node: Node, addr: String) -> std::io::Re
         .get(|c| async { unerror(mring::get_size(c).await) })
         .post(|c| async { unerror(mring::set_size(c).await) })
         .at("/node")
-        .post(|c| async { unerror(mring::get_nodes(c).await) })
+        .get(|c| async { unerror(mring::get_nodes(c).await) })
         .post(|c| async { unerror(mring::add_node(c).await) });
     info!(logger, "Starting server on {}", addr);
     app.listen(addr).await?;

@@ -20,8 +20,8 @@ cargo run -- -e 127.0.0.1:8082 -p 127.0.0.1:8081 -p 127.0.0.1:8083 -i2 -n --http
 # join third node
 cargo run -- -e 127.0.0.1:8083 -p 127.0.0.1:8081 -p 127.0.0.1:8082 -i3 -n --http 127.0.0.1:9083
 # activate nodes in raft group (triggers AddNode message)
-curl -X POST http://127.0.0.1:9081/node/2
-curl -X POST http://127.0.0.1:9081/node/3
+curl -v -X POST http://127.0.0.1:9081/uring/2
+curl -v -X POST http://127.0.0.1:9081/uring/3
 
 # kill node 1
 # restart node 1
