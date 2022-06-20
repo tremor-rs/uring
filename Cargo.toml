@@ -6,11 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-raft = "0.6.1"
+openraft = { git = "https://github.com/datafuselabs/openraft.git", branch = "main" }
 async-std = { version = "1.11.0", features = [
-    "unstable",
-    "tokio1",
-    "attributes",
+  "unstable",
+  "tokio1",
+  "attributes",
 ] }
 async-trait = "0.1"
 serde = "1.0.137"
@@ -20,10 +20,10 @@ tracing = "0.1.34"
 tracing-subscriber = "*"
 serde_json = "1.0.81"
 toy-rpc = { version = "*", features = [
-    "async_std_runtime",
-    "ws_async_std",
-    "server",
-    "client",
+  "async_std_runtime",
+  "ws_async_std",
+  "server",
+  "client",
 ] }
 clap = "*"
 dashmap = "*"

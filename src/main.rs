@@ -1,9 +1,9 @@
 use std::{collections::HashSet, env, sync::Arc, time::Duration};
 
-use async_raft::{AppData, AppDataResponse, Config, Raft};
 use async_std::{net::TcpListener, task};
 use memstore::MemStore;
 use network::{RaftRouter, TremorRaft};
+use openraft::{declare_raft_types, Config, Raft};
 use serde::{Deserialize, Serialize};
 // We use anyhow::Result in our impl below.
 use anyhow::Result;
@@ -12,33 +12,22 @@ use tracing::info;
 mod memstore;
 mod network;
 
-/// The application data request type which the `MemStore` works with.
-///
-/// Conceptually, for demo purposes, this represents an update to a client's status info,
-/// returning the previously recorded status.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ClientRequest {
-    /// The ID of the client which has sent the request.
-    pub client: String,
-    /// The serial number of this request.
-    pub serial: u64,
-    /// A string describing the status of the client. For a real application, this should probably
-    /// be an enum representing all of the various types of requests / operations which a client
-    /// can perform.
-    pub status: String,
-}
-
-impl AppData for ClientRequest {}
+declare_raft_types!(
+    /// Dummy Raft types for the purpose of testing internal structures requiring
+    /// `RaftTypeConfig`, like `MembershipConfig`.
+    pub(crate) RaftConfig: D = u64, R = u64, NodeId = u64
+);
+// impl AppData for ClientRequest {}
 
 type ClientError = String;
 /// The application data response type which the `MemStore` works with.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClientResponse(Result<Option<String>, ClientError>);
 
-impl AppDataResponse for ClientResponse {}
+// impl AppDataResponse for ClientResponse {}
 
 /// A concrete Raft type used during testing.
-pub type MemRaft = Raft<ClientRequest, ClientResponse, RaftRouter, MemStore>;
+pub type MemRaft = Raft<memstore::Config, ClientResponse, MemStore>;
 
 #[async_std::main]
 async fn main() {
@@ -55,7 +44,7 @@ async fn main() {
             .expect("failed to build Raft config"),
     );
     let network = Arc::new(RaftRouter::new(config.clone()).await);
-    let storage = Arc::new(MemStore::new(node_id));
+    let storage = Arc::new(MemStore::new());
 
     // Create a new Raft node, which spawns an async task which
     // runs the Raft core logic. Keep this Raft instance around

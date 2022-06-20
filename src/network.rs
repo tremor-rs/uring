@@ -1,14 +1,14 @@
-use crate::{ClientRequest, MemRaft};
+use crate::{memstore::ClientRequest, MemRaft};
 use anyhow::Result as AResult;
-use async_raft::{
+use async_trait::async_trait;
+use dashmap::DashMap;
+use openraft::{
     raft::{
         AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest,
         InstallSnapshotResponse, VoteRequest, VoteResponse,
     },
     Config, RaftNetwork,
 };
-use async_trait::async_trait;
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, sync::Arc};
 use toy_rpc::macros::export_impl;
@@ -46,7 +46,7 @@ impl TremorRaft {
     pub async fn append_entries(
         &self,
         req: AppendEntriesRequest<ClientRequest>,
-    ) -> Result<AppendEntriesResponse, Error> {
+    ) -> Result<AppendEntriesResponse<u64>, Error> {
         info!("append_entries");
         dbg!(&req);
         let res = self
@@ -63,8 +63,8 @@ impl TremorRaft {
     #[export_method]
     pub async fn install_snapshot(
         &self,
-        req: InstallSnapshotRequest,
-    ) -> Result<InstallSnapshotResponse, Error> {
+        req: InstallSnapshotRequest<u64>,
+    ) -> Result<InstallSnapshotResponse<u64>, Error> {
         info!("install_snapshot");
         self.raft
             .install_snapshot(req)
@@ -73,7 +73,7 @@ impl TremorRaft {
     }
 
     #[export_method]
-    pub async fn vote(&self, req: VoteRequest) -> Result<VoteResponse, Error> {
+    pub async fn vote(&self, req: VoteRequest<u64>) -> Result<VoteResponse<u64>, Error> {
         info!("vote");
         self.raft.vote(req).await.map_err(|e| Error(format!("{e}")))
     }
@@ -98,11 +98,11 @@ impl RaftRouter {
 #[async_trait]
 impl RaftNetwork<ClientRequest> for RaftRouter {
     /// Send an AppendEntries RPC to the target Raft node (§5).
-    async fn append_entries(
+    async fn send_append_entries(
         &self,
         target: u64,
         rpc: AppendEntriesRequest<ClientRequest>,
-    ) -> AResult<AppendEntriesResponse> {
+    ) -> AResult<AppendEntriesResponse<u64>> {
         self.init_client(target).await?;
         let call: Call<AppendEntriesResponse> = self
             .clients
@@ -114,11 +114,11 @@ impl RaftNetwork<ClientRequest> for RaftRouter {
     }
 
     /// Send an InstallSnapshot RPC to the target Raft node (§7).
-    async fn install_snapshot(
+    async fn send_install_snapshot(
         &self,
         target: u64,
-        rpc: InstallSnapshotRequest,
-    ) -> AResult<InstallSnapshotResponse> {
+        rpc: InstallSnapshotRequest<u64>,
+    ) -> AResult<InstallSnapshotResponse<u64>> {
         self.init_client(target).await?;
 
         let call: Call<Result<InstallSnapshotResponse, Error>> = self
@@ -130,7 +130,7 @@ impl RaftNetwork<ClientRequest> for RaftRouter {
     }
 
     /// Send a RequestVote RPC to the target Raft node (§5).
-    async fn vote(&self, target: u64, rpc: VoteRequest) -> AResult<VoteResponse> {
+    async fn send_vote(&self, target: u64, rpc: VoteRequest<u64>) -> AResult<VoteResponse<u64>> {
         self.init_client(target).await?;
         let call: Call<VoteResponse> = self
             .clients
