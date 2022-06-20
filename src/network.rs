@@ -1,120 +1,148 @@
-// Copyright 2018-2020, Wayfair GmbH
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-pub mod ws;
-
-use crate::network::ws::WsMessage;
-use crate::*;
+use crate::{ClientRequest, MemRaft};
+use anyhow::Result as AResult;
+use async_raft::{
+    raft::{
+        AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest,
+        InstallSnapshotResponse, VoteRequest, VoteResponse,
+    },
+    Config, RaftNetwork,
+};
 use async_trait::async_trait;
-use futures::channel::mpsc::{Sender, TryRecvError};
-use raft::eraftpb::Message as RaftMessage;
-use std::{fmt, io};
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fmt::Display, sync::Arc};
+use toy_rpc::macros::export_impl;
+use toy_rpc::{
+    client::{Call, Client},
+    pubsub::AckModeNone,
+};
+use tracing::{debug, error, info};
 
-#[derive(Debug)]
-pub enum Error {
-    Io(io::Error),
-    Generic(String),
-    NotConnected(NodeId),
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct Error(String);
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 impl std::error::Error for Error {}
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+impl Into<toy_rpc::Error> for Error {
+    fn into(self) -> toy_rpc::Error {
+        toy_rpc::Error::Internal(Box::new(self))
     }
 }
 
-pub enum RaftNetworkMsg {
-    Status(RequestId, Sender<WsMessage>),
-    Version(RequestId, Sender<WsMessage>), // FIXME normalize to WS for now to work with both rest/ws
-
-    // Raft related
-    AckProposal(ProposalId, bool),
-    ForwardProposal(NodeId, ProposalId, ServiceId, EventId, Vec<u8>),
-    GetNode(NodeId, Sender<bool>),
-    AddNode(NodeId, Sender<bool>),
-
-    Event(EventId, ServiceId, Vec<u8>),
-    RaftMsg(RaftMessage),
+pub(crate) struct TremorRaft {
+    raft: MemRaft,
 }
 
-pub enum TryNextError {
-    Done,
-    Error(TryRecvError),
+#[export_impl]
+impl TremorRaft {
+    pub fn new(raft: MemRaft) -> Self {
+        Self { raft }
+    }
+
+    #[export_method]
+    pub async fn append_entries(
+        &self,
+        req: AppendEntriesRequest<ClientRequest>,
+    ) -> Result<AppendEntriesResponse, Error> {
+        info!("append_entries");
+        let res = self
+            .raft
+            .append_entries(req)
+            .await
+            .map_err(|e| Error(format!("{e}")));
+        if let Err(e) = &res {
+            error!("append error: {e}");
+        }
+        res
+    }
+
+    #[export_method]
+    pub async fn install_snapshot(
+        &self,
+        req: InstallSnapshotRequest,
+    ) -> Result<InstallSnapshotResponse, Error> {
+        info!("install_snapshot");
+        self.raft
+            .install_snapshot(req)
+            .await
+            .map_err(|e| Error(format!("{e}")))
+    }
+
+    #[export_method]
+    pub async fn vote(&self, req: VoteRequest) -> Result<VoteResponse, Error> {
+        info!("vote");
+        self.raft.vote(req).await.map_err(|e| Error(format!("{e}")))
+    }
+}
+
+/// A type which emulates a network transport and implements the `RaftNetwork` trait.
+pub struct RaftRouter {
+    clients: dashmap::DashMap<u64, Client<AckModeNone>>,
+}
+impl RaftRouter {
+    async fn init_client(&self, node_id: u64) -> AResult<()> {
+        if !self.clients.contains_key(&node_id) {
+            let addr = format!("127.0.0.1:{}", 10000 + node_id);
+            let client = Client::dial(addr).await?;
+            self.clients.insert(node_id, client);
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
-pub trait Network: Send + Sync {
-    async fn next(&mut self) -> Option<RaftNetworkMsg>;
-    async fn ack_proposal(
-        &mut self,
-        to: NodeId,
-        pid: ProposalId,
-        success: bool,
-    ) -> Result<(), Error>;
-    async fn event_reply(&mut self, id: EventId, code: u16, reply: Vec<u8>) -> Result<(), Error>;
-    async fn send_msg(&mut self, msg: RaftMessage) -> Result<(), Error>;
-    fn connections(&self) -> Vec<NodeId>;
-    async fn forward_proposal(
-        &mut self,
-        from: NodeId,
-        to: NodeId,
-        pid: ProposalId,
-        sid: ServiceId,
-        eid: EventId,
-        data: Vec<u8>,
-    ) -> Result<(), Error>;
+impl RaftNetwork<ClientRequest> for RaftRouter {
+    /// Send an AppendEntries RPC to the target Raft node (§5).
+    async fn append_entries(
+        &self,
+        target: u64,
+        rpc: AppendEntriesRequest<ClientRequest>,
+    ) -> AResult<AppendEntriesResponse> {
+        self.init_client(target).await?;
+        let call: Call<AppendEntriesResponse> = self
+            .clients
+            .get(&target)
+            .expect("client not found")
+            .call("TremorRaft.append_entries", rpc);
+
+        Ok(dbg!(call.await)?)
+    }
+
+    /// Send an InstallSnapshot RPC to the target Raft node (§7).
+    async fn install_snapshot(
+        &self,
+        target: u64,
+        rpc: InstallSnapshotRequest,
+    ) -> AResult<InstallSnapshotResponse> {
+        self.init_client(target).await?;
+
+        let call: Call<Result<InstallSnapshotResponse, Error>> = self
+            .clients
+            .get(&target)
+            .expect("client not found")
+            .call("TremorRaft.install_snapshot", rpc);
+        Ok(call.await??)
+    }
+
+    /// Send a RequestVote RPC to the target Raft node (§5).
+    async fn vote(&self, target: u64, rpc: VoteRequest) -> AResult<VoteResponse> {
+        self.init_client(target).await?;
+        let call: Call<VoteResponse> = self
+            .clients
+            .get(&target)
+            .expect("client not found")
+            .call("TremorRaft.vote", rpc);
+        Ok(call.await?)
+    }
 }
 
-#[derive(Default)]
-pub struct NullNetwork {}
-
-#[async_trait]
-impl Network for NullNetwork {
-    async fn next(&mut self) -> Option<RaftNetworkMsg> {
-        unimplemented!()
-    }
-    async fn ack_proposal(
-        &mut self,
-        _to: NodeId,
-        _pid: ProposalId,
-        _success: bool,
-    ) -> Result<(), network::Error> {
-        unimplemented!()
-    }
-    async fn event_reply(
-        &mut self,
-        _id: EventId,
-        _code: u16,
-        _reply: Vec<u8>,
-    ) -> Result<(), network::Error> {
-        unimplemented!()
-    }
-    async fn send_msg(&mut self, _msg: RaftMessage) -> Result<(), network::Error> {
-        unimplemented!()
-    }
-    fn connections(&self) -> Vec<NodeId> {
-        unimplemented!()
-    }
-    async fn forward_proposal(
-        &mut self,
-        _from: NodeId,
-        _to: NodeId,
-        _pid: ProposalId,
-        _sid: ServiceId,
-        _eid: EventId,
-        _data: Vec<u8>,
-    ) -> Result<(), network::Error> {
-        unimplemented!()
+impl RaftRouter {
+    pub(crate) async fn new(_config: Arc<Config>) -> RaftRouter {
+        RaftRouter {
+            clients: DashMap::new(),
+        }
     }
 }

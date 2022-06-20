@@ -1,210 +1,100 @@
-// Copyright 2018-2020, Wayfair GmbH
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+use std::{collections::HashSet, env, sync::Arc, time::Duration};
 
-#![recursion_limit = "2048"]
+use async_raft::{AppData, AppDataResponse, Config, Raft};
+use async_std::{net::TcpListener, task};
+use memstore::MemStore;
+use network::{RaftRouter, TremorRaft};
+use serde::{Deserialize, Serialize};
+// We use anyhow::Result in our impl below.
+use anyhow::Result;
+use toy_rpc::Server;
+mod memstore;
+mod network;
 
-#[allow(unused)]
-pub mod errors;
-pub mod network;
-mod protocol;
-mod pubsub;
-pub mod raft_node;
-pub mod service;
-pub mod storage;
-pub mod version;
-
-use crate::network::{ws, Network, RaftNetworkMsg};
-use crate::raft_node::*;
-use crate::service::mring::{self, placement::continuous};
-use crate::service::{kv, Service};
-use crate::storage::URRocksStorage;
-use async_std::task;
-use clap::{App as ClApp, Arg};
-use futures::{select, FutureExt, StreamExt};
-use serde_derive::{Deserialize, Serialize};
-use slog::{Drain, Logger};
-use slog_json;
-use std::time::{Duration, Instant};
-pub use uring_common::*;
-use ws_proto::PSURing;
-
-const CHANNEL_SIZE: usize = 64usize;
-
-#[macro_use]
-extern crate slog;
-
-#[derive(Deserialize, Serialize)]
-pub struct KV {
-    key: String,
-    value: serde_json::Value,
+/// The application data request type which the `MemStore` works with.
+///
+/// Conceptually, for demo purposes, this represents an update to a client's status info,
+/// returning the previously recorded status.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ClientRequest {
+    /// The ID of the client which has sent the request.
+    pub client: String,
+    /// The serial number of this request.
+    pub serial: u64,
+    /// A string describing the status of the client. For a real application, this should probably
+    /// be an enum representing all of the various types of requests / operations which a client
+    /// can perform.
+    pub status: String,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-pub struct Event {
-    nid: Option<NodeId>,
-    eid: EventId,
-    sid: ServiceId,
-    data: Vec<u8>,
+impl AppData for ClientRequest {}
+
+type ClientError = String;
+/// The application data response type which the `MemStore` works with.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClientResponse(Result<Option<String>, ClientError>);
+
+impl AppDataResponse for ClientResponse {}
+
+/// A concrete Raft type used during testing.
+pub type MemRaft = Raft<ClientRequest, ClientResponse, RaftRouter, MemStore>;
+
+#[async_std::main]
+async fn main() {
+    tracing_subscriber::fmt().init();
+    // Get our node's ID from stable storage.
+    let node_id = get_id_from_storage().await;
+
+    // Build our Raft runtime config, then instantiate our
+    // RaftNetwork & RaftStorage impls.
+    let config = Arc::new(
+        Config::build("primary-raft-group".into())
+            .validate()
+            .expect("failed to build Raft config"),
+    );
+    let network = Arc::new(RaftRouter::new(config.clone()).await);
+    let storage = Arc::new(MemStore::new(node_id));
+
+    // Create a new Raft node, which spawns an async task which
+    // runs the Raft core logic. Keep this Raft instance around
+    // for calling API methods based on events in your app.
+    let raft = Raft::new(node_id, config, network, storage);
+
+    run_app(node_id, raft).await;
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct KVs {
-    scope: u16,
-    key: Vec<u8>,
-    value: Vec<u8>,
+async fn get_id_from_storage() -> u64 {
+    env::args()
+        .skip(1)
+        .map(|a| a.parse::<u64>().expect("bad argument"))
+        .next()
+        .expect("bad argumet")
 }
 
-async fn raft_loop<N: Network>(
-    id: NodeId,
-    bootstrap: bool,
-    ring_size: Option<u64>,
-    pubsub: pubsub::Channel,
-    network: N,
-    logger: Logger,
-) where
-    N: 'static,
-{
-    // Tick the raft node per 100ms. So use an `Instant` to trace it.
-    let mut node: RaftNode<URRocksStorage, _> = if bootstrap {
-        RaftNode::create_raft_leader(&logger, id, pubsub, network).await
-    } else {
-        RaftNode::create_raft_follower(&logger, id, pubsub, network).await
-    };
-    node.set_raft_tick_duration(Duration::from_millis(100));
-    node.log().await;
-    let kv = kv::Service::new(&logger, 0);
-    node.add_service(kv::ID, Box::new(kv));
-    let mut vnode: mring::Service<continuous::Strategy> = mring::Service::new();
+async fn run_app(node_id: u64, raft: MemRaft) {
+    let addr = format!("127.0.0.1:{}", 10000 + node_id);
+    let mut members = HashSet::new();
 
-    if let Some(size) = ring_size {
-        if bootstrap {
-            vnode
-                .execute(
-                    node.raft_group.as_ref().unwrap(),
-                    &mut node.pubsub,
-                    service::mring::Event::set_size(size),
-                )
-                .await
-                .unwrap();
-        }
+    let nodes: Vec<_> = env::args()
+        .skip(1)
+        .map(|a| a.parse::<u64>().expect("bad argument"))
+        .collect();
+    for nid in nodes {
+        members.insert(nid);
     }
-    node.add_service(mring::ID, Box::new(vnode));
+    async_std::task::sleep(Duration::from_secs(5)).await;
+    raft.initialize(members)
+        .await
+        .expect("oh no initialize failed");
 
-    let version = crate::service::version::Service::new(&logger);
-    node.add_service(crate::service::version::ID, Box::new(version));
+    let raft = TremorRaft::new(raft);
+    let raft_server = Arc::new(raft);
 
-    let status = crate::service::status::Service::new(&logger);
-    let status = Box::new(status);
-    node.add_service(service::status::ID, status);
+    let server = Server::builder().register(raft_server).build();
+    let listener = TcpListener::bind(addr).await.unwrap();
 
-    node.node_loop().await.unwrap()
-}
-
-fn main() -> std::io::Result<()> {
-    use version::VERSION;
-    let matches = ClApp::new("cake")
-        .version(VERSION)
-        .author("The Treamor Team")
-        .about("Uring Demo")
-        .arg(
-            Arg::with_name("id")
-                .short("i")
-                .long("id")
-                .value_name("ID")
-                .help("The Node ID")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("bootstrap")
-                .short("b")
-                .long("bootstrap")
-                .value_name("BOOTSTRAP")
-                .help("Sets the node to bootstrap mode and become leader")
-                .takes_value(false),
-        )
-        .arg(
-            Arg::with_name("ring-size")
-                .short("r")
-                .long("ring-size")
-                .value_name("RING_SIZE")
-                .help("Initialized mring size, only has an effect when used together with --bootstrap")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("http-endpoint")
-                .long("http")
-                .value_name("HTTP")
-                .help("http endpoint to listen to")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("no-json")
-                .short("n")
-                .long("no-json")
-                .value_name("NOJSON")
-                .help("don't log via json")
-                .takes_value(false),
-        )
-        .arg(
-            Arg::with_name("peers")
-                .short("p")
-                .long("peers")
-                .value_name("PEERS")
-                .multiple(true)
-                .takes_value(true)
-                .help("Peers to connet to"),
-        )
-        .arg(
-            Arg::with_name("endpoint")
-                .short("e")
-                .long("endpoint")
-                .value_name("ENDPOINT")
-                .takes_value(true)
-                .default_value("127.0.0.1:8080")
-                .help("Peers to connet to"),
-        )
-        .get_matches();
-
-    let logger = if matches.is_present("no-json") {
-        let decorator = slog_term::TermDecorator::new().build();
-        let drain = slog_term::FullFormat::new(decorator).build().fuse();
-        let drain = slog_async::Async::new(drain).build().fuse();
-        slog::Logger::root(drain, o!())
-    } else {
-        let drain = slog_json::Json::default(std::io::stderr()).map(slog::Fuse);
-        let drain = slog_async::Async::new(drain).build().fuse();
-        slog::Logger::root(drain, o!())
-    };
-    let peers = matches.values_of_lossy("peers").unwrap_or(vec![]);
-    let ring_size: Option<u64> = matches.value_of("ring-size").map(|s| s.parse().unwrap());
-    let bootstrap = matches.is_present("bootstrap");
-    let endpoint = matches.value_of("endpoint").unwrap_or("127.0.0.1:8080");
-    let id = NodeId(matches.value_of("id").unwrap_or("1").parse().unwrap());
-    let loop_logger = logger.clone();
-    let rest_endpoint = matches.value_of("http-endpoint");
-
-    let ps_tx = pubsub::start(&logger);
-
-    let network = ws::Network::new(&logger, id, endpoint, rest_endpoint, peers, ps_tx.clone());
-
-    task::block_on(raft_loop(
-        id,
-        bootstrap,
-        ring_size,
-        ps_tx,
-        network,
-        loop_logger,
-    ));
-    Ok(())
+    let handle = task::spawn(async move {
+        server.accept(listener).await.unwrap();
+    });
+    handle.await;
 }

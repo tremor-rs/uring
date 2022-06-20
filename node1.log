@@ -1,0 +1,208 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished release [optimized] target(s) in 0.08s
+     Running `target/release/uring3 --id 1 --ports 43000,43001,43002 --n-items 50`
+INFO 2022-06-20 08:47:29.062: Getting network up.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Spawning party for a session.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Spawning network.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Network spawned.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Initializing Runway.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Runway initialized.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Initializing Member.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Member initialized.
+INFO 2022-06-20 08:47:29.062: loaded units from backup. Loaded 0 units
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Runway started.
+INFO 2022-06-20 08:47:29.062: NodeIndex(1) Starting all services...
+ERROR 2022-06-20 08:47:29.062: Sending failed, recipient: 0
+INFO 2022-06-20 08:47:29.063: NodeIndex(1) All services started.
+DEBUG 2022-06-20 08:47:33.069: NodeIndex(1) Starting round task terminated.
+INFO 2022-06-20 08:47:33.069: received next round from unit collection: 0
+DEBUG 2022-06-20 08:47:33.069: NodeIndex(1) Backup loading task terminated.
+DEBUG 2022-06-20 08:47:33.069: Creator starting from round 0
+DEBUG 2022-06-20 08:47:33.069: NodeIndex(1) Could not send response to collection.
+DEBUG 2022-06-20 08:47:34.076: NodeIndex(1) New unit in Extender round 0 creator NodeIndex(0) hash [70, 213, 68, 47, 23, 138, 14, 77].
+DEBUG 2022-06-20 08:47:38.069: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:38.070: NodeIndex(1) New unit in Extender round 0 creator NodeIndex(1) hash [245, 84, 231, 39, 169, 130, 148, 103].
+DEBUG 2022-06-20 08:47:38.075: NodeIndex(1) New unit in Extender round 0 creator NodeIndex(2) hash [180, 93, 103, 75, 168, 6, 155, 33].
+DEBUG 2022-06-20 08:47:38.083: NodeIndex(1) New unit in Extender round 1 creator NodeIndex(0) hash [219, 183, 176, 139, 244, 204, 197, 183].
+DEBUG 2022-06-20 08:47:38.570: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:38.570: NodeIndex(1) New unit in Extender round 1 creator NodeIndex(1) hash [156, 53, 249, 151, 73, 74, 37, 73].
+DEBUG 2022-06-20 08:47:38.575: NodeIndex(1) New unit in Extender round 1 creator NodeIndex(2) hash [170, 9, 216, 38, 210, 112, 103, 139].
+DEBUG 2022-06-20 08:47:38.583: NodeIndex(1) New unit in Extender round 2 creator NodeIndex(0) hash [102, 233, 110, 191, 64, 4, 59, 51].
+DEBUG 2022-06-20 08:47:39.070: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:39.070: NodeIndex(1) New unit in Extender round 2 creator NodeIndex(1) hash [215, 33, 126, 232, 145, 220, 120, 3].
+DEBUG 2022-06-20 08:47:39.076: NodeIndex(1) New unit in Extender round 2 creator NodeIndex(2) hash [161, 240, 4, 10, 149, 66, 237, 118].
+DEBUG 2022-06-20 08:47:39.084: NodeIndex(1) New unit in Extender round 3 creator NodeIndex(0) hash [143, 62, 216, 35, 139, 71, 109, 124].
+DEBUG 2022-06-20 08:47:39.570: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:39.570: NodeIndex(1) New unit in Extender round 3 creator NodeIndex(1) hash [128, 103, 95, 192, 10, 42, 77, 191].
+DEBUG 2022-06-20 08:47:39.577: NodeIndex(1) New unit in Extender round 3 creator NodeIndex(2) hash [86, 46, 38, 24, 193, 121, 43, 130].
+DEBUG 2022-06-20 08:47:39.585: NodeIndex(1) New unit in Extender round 4 creator NodeIndex(0) hash [146, 31, 128, 198, 211, 254, 10, 145].
+DEBUG 2022-06-20 08:47:39.585: NodeIndex(1) Finalized round 0 with head [70, 213, 68, 47, 23, 138, 14, 77].
+DEBUG 2022-06-20 08:47:39.585: Got new batch. Finalized: 1
+DEBUG 2022-06-20 08:47:40.070: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:40.070: NodeIndex(1) New unit in Extender round 4 creator NodeIndex(1) hash [127, 240, 176, 172, 41, 148, 35, 177].
+DEBUG 2022-06-20 08:47:40.078: NodeIndex(1) New unit in Extender round 4 creator NodeIndex(2) hash [0, 140, 58, 26, 65, 97, 2, 32].
+DEBUG 2022-06-20 08:47:40.086: NodeIndex(1) New unit in Extender round 5 creator NodeIndex(0) hash [171, 142, 212, 95, 90, 192, 196, 221].
+DEBUG 2022-06-20 08:47:40.086: NodeIndex(1) Finalized round 1 with head [156, 53, 249, 151, 73, 74, 37, 73].
+DEBUG 2022-06-20 08:47:40.086: Got new batch. Finalized: 2
+DEBUG 2022-06-20 08:47:40.086: Got new batch. Finalized: 3
+DEBUG 2022-06-20 08:47:40.086: Got new batch. Finalized: 4
+DEBUG 2022-06-20 08:47:40.571: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:40.571: NodeIndex(1) New unit in Extender round 5 creator NodeIndex(1) hash [169, 39, 175, 140, 225, 177, 223, 32].
+DEBUG 2022-06-20 08:47:40.579: NodeIndex(1) New unit in Extender round 5 creator NodeIndex(2) hash [151, 104, 58, 17, 150, 116, 79, 101].
+DEBUG 2022-06-20 08:47:40.586: NodeIndex(1) New unit in Extender round 6 creator NodeIndex(0) hash [243, 171, 98, 185, 26, 1, 63, 217].
+DEBUG 2022-06-20 08:47:40.586: NodeIndex(1) Finalized round 2 with head [102, 233, 110, 191, 64, 4, 59, 51].
+DEBUG 2022-06-20 08:47:40.587: Got new batch. Finalized: 5
+DEBUG 2022-06-20 08:47:40.587: Got new batch. Finalized: 6
+DEBUG 2022-06-20 08:47:40.587: Got new batch. Finalized: 7
+DEBUG 2022-06-20 08:47:41.071: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:41.071: NodeIndex(1) New unit in Extender round 6 creator NodeIndex(1) hash [7, 120, 7, 195, 19, 5, 24, 204].
+DEBUG 2022-06-20 08:47:41.080: NodeIndex(1) New unit in Extender round 6 creator NodeIndex(2) hash [148, 193, 110, 125, 64, 109, 151, 112].
+DEBUG 2022-06-20 08:47:41.087: NodeIndex(1) New unit in Extender round 7 creator NodeIndex(0) hash [47, 193, 22, 22, 210, 104, 59, 6].
+DEBUG 2022-06-20 08:47:41.087: NodeIndex(1) Finalized round 3 with head [86, 46, 38, 24, 193, 121, 43, 130].
+DEBUG 2022-06-20 08:47:41.087: Got new batch. Finalized: 8
+DEBUG 2022-06-20 08:47:41.087: Got new batch. Finalized: 9
+DEBUG 2022-06-20 08:47:41.087: Got new batch. Finalized: 10
+DEBUG 2022-06-20 08:47:41.571: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:41.571: NodeIndex(1) New unit in Extender round 7 creator NodeIndex(1) hash [44, 101, 175, 169, 14, 72, 130, 235].
+DEBUG 2022-06-20 08:47:41.581: NodeIndex(1) New unit in Extender round 7 creator NodeIndex(2) hash [106, 1, 87, 15, 23, 25, 24, 202].
+DEBUG 2022-06-20 08:47:41.588: NodeIndex(1) New unit in Extender round 8 creator NodeIndex(0) hash [114, 242, 82, 12, 75, 28, 147, 56].
+DEBUG 2022-06-20 08:47:41.588: NodeIndex(1) Finalized round 4 with head [0, 140, 58, 26, 65, 97, 2, 32].
+DEBUG 2022-06-20 08:47:41.588: Got new batch. Finalized: 11
+DEBUG 2022-06-20 08:47:41.588: Got new batch. Finalized: 12
+DEBUG 2022-06-20 08:47:41.588: Got new batch. Finalized: 13
+DEBUG 2022-06-20 08:47:42.071: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:42.071: NodeIndex(1) New unit in Extender round 8 creator NodeIndex(1) hash [23, 27, 53, 9, 42, 182, 53, 210].
+DEBUG 2022-06-20 08:47:42.082: NodeIndex(1) New unit in Extender round 8 creator NodeIndex(2) hash [158, 102, 85, 125, 163, 57, 100, 65].
+DEBUG 2022-06-20 08:47:42.089: NodeIndex(1) New unit in Extender round 9 creator NodeIndex(0) hash [84, 98, 223, 166, 219, 123, 48, 25].
+DEBUG 2022-06-20 08:47:42.089: NodeIndex(1) Finalized round 5 with head [151, 104, 58, 17, 150, 116, 79, 101].
+DEBUG 2022-06-20 08:47:42.089: Got new batch. Finalized: 14
+DEBUG 2022-06-20 08:47:42.089: Got new batch. Finalized: 15
+DEBUG 2022-06-20 08:47:42.089: Got new batch. Finalized: 16
+DEBUG 2022-06-20 08:47:42.571: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:42.571: NodeIndex(1) New unit in Extender round 9 creator NodeIndex(1) hash [167, 18, 63, 53, 123, 151, 149, 75].
+DEBUG 2022-06-20 08:47:42.582: NodeIndex(1) New unit in Extender round 9 creator NodeIndex(2) hash [32, 174, 137, 212, 77, 175, 7, 20].
+DEBUG 2022-06-20 08:47:42.590: NodeIndex(1) New unit in Extender round 10 creator NodeIndex(0) hash [207, 0, 139, 139, 19, 0, 125, 201].
+DEBUG 2022-06-20 08:47:42.590: NodeIndex(1) Finalized round 6 with head [7, 120, 7, 195, 19, 5, 24, 204].
+DEBUG 2022-06-20 08:47:42.590: Got new batch. Finalized: 17
+DEBUG 2022-06-20 08:47:42.590: Got new batch. Finalized: 18
+DEBUG 2022-06-20 08:47:42.590: Got new batch. Finalized: 19
+DEBUG 2022-06-20 08:47:43.071: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:43.072: NodeIndex(1) New unit in Extender round 10 creator NodeIndex(1) hash [163, 18, 28, 221, 71, 95, 160, 12].
+DEBUG 2022-06-20 08:47:43.083: NodeIndex(1) New unit in Extender round 10 creator NodeIndex(2) hash [247, 105, 7, 21, 129, 81, 119, 99].
+DEBUG 2022-06-20 08:47:43.091: NodeIndex(1) New unit in Extender round 11 creator NodeIndex(0) hash [134, 55, 241, 174, 174, 142, 209, 245].
+DEBUG 2022-06-20 08:47:43.091: NodeIndex(1) Finalized round 7 with head [44, 101, 175, 169, 14, 72, 130, 235].
+DEBUG 2022-06-20 08:47:43.091: Got new batch. Finalized: 20
+DEBUG 2022-06-20 08:47:43.091: Got new batch. Finalized: 21
+DEBUG 2022-06-20 08:47:43.091: Got new batch. Finalized: 22
+DEBUG 2022-06-20 08:47:43.572: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:43.572: NodeIndex(1) New unit in Extender round 11 creator NodeIndex(1) hash [220, 124, 127, 209, 140, 25, 122, 40].
+DEBUG 2022-06-20 08:47:43.584: NodeIndex(1) New unit in Extender round 11 creator NodeIndex(2) hash [221, 60, 223, 247, 185, 148, 40, 104].
+DEBUG 2022-06-20 08:47:43.591: NodeIndex(1) New unit in Extender round 12 creator NodeIndex(0) hash [252, 167, 30, 129, 137, 92, 171, 206].
+DEBUG 2022-06-20 08:47:43.591: NodeIndex(1) Finalized round 8 with head [23, 27, 53, 9, 42, 182, 53, 210].
+DEBUG 2022-06-20 08:47:43.592: Got new batch. Finalized: 23
+DEBUG 2022-06-20 08:47:43.592: Got new batch. Finalized: 24
+DEBUG 2022-06-20 08:47:43.592: Got new batch. Finalized: 25
+DEBUG 2022-06-20 08:47:44.072: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:44.072: NodeIndex(1) New unit in Extender round 12 creator NodeIndex(1) hash [3, 93, 231, 88, 80, 172, 45, 20].
+DEBUG 2022-06-20 08:47:44.085: NodeIndex(1) New unit in Extender round 12 creator NodeIndex(2) hash [219, 10, 250, 129, 230, 91, 46, 151].
+DEBUG 2022-06-20 08:47:44.092: NodeIndex(1) New unit in Extender round 13 creator NodeIndex(0) hash [119, 144, 84, 149, 62, 223, 130, 133].
+DEBUG 2022-06-20 08:47:44.092: NodeIndex(1) Finalized round 9 with head [32, 174, 137, 212, 77, 175, 7, 20].
+DEBUG 2022-06-20 08:47:44.092: Got new batch. Finalized: 26
+DEBUG 2022-06-20 08:47:44.092: Got new batch. Finalized: 27
+DEBUG 2022-06-20 08:47:44.092: Got new batch. Finalized: 28
+DEBUG 2022-06-20 08:47:44.572: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:44.572: NodeIndex(1) New unit in Extender round 13 creator NodeIndex(1) hash [43, 111, 84, 253, 151, 138, 155, 33].
+DEBUG 2022-06-20 08:47:44.586: NodeIndex(1) New unit in Extender round 13 creator NodeIndex(2) hash [244, 20, 236, 218, 55, 73, 223, 34].
+DEBUG 2022-06-20 08:47:44.593: NodeIndex(1) New unit in Extender round 14 creator NodeIndex(0) hash [47, 123, 42, 55, 165, 16, 232, 113].
+DEBUG 2022-06-20 08:47:44.593: NodeIndex(1) Finalized round 10 with head [163, 18, 28, 221, 71, 95, 160, 12].
+DEBUG 2022-06-20 08:47:44.593: Got new batch. Finalized: 29
+DEBUG 2022-06-20 08:47:44.593: Got new batch. Finalized: 30
+DEBUG 2022-06-20 08:47:44.593: Got new batch. Finalized: 31
+DEBUG 2022-06-20 08:47:45.072: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:45.072: NodeIndex(1) New unit in Extender round 14 creator NodeIndex(1) hash [133, 241, 142, 240, 111, 237, 208, 95].
+DEBUG 2022-06-20 08:47:45.087: NodeIndex(1) New unit in Extender round 14 creator NodeIndex(2) hash [167, 41, 20, 181, 88, 82, 33, 172].
+DEBUG 2022-06-20 08:47:45.094: NodeIndex(1) New unit in Extender round 15 creator NodeIndex(0) hash [102, 176, 17, 165, 202, 54, 126, 130].
+DEBUG 2022-06-20 08:47:45.094: NodeIndex(1) Finalized round 11 with head [134, 55, 241, 174, 174, 142, 209, 245].
+DEBUG 2022-06-20 08:47:45.094: Got new batch. Finalized: 32
+DEBUG 2022-06-20 08:47:45.094: Got new batch. Finalized: 33
+DEBUG 2022-06-20 08:47:45.094: Got new batch. Finalized: 34
+DEBUG 2022-06-20 08:47:45.572: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:45.572: NodeIndex(1) New unit in Extender round 15 creator NodeIndex(1) hash [76, 29, 13, 115, 130, 245, 1, 241].
+DEBUG 2022-06-20 08:47:45.588: NodeIndex(1) New unit in Extender round 15 creator NodeIndex(2) hash [137, 199, 251, 110, 85, 66, 3, 77].
+DEBUG 2022-06-20 08:47:45.594: NodeIndex(1) New unit in Extender round 16 creator NodeIndex(0) hash [16, 65, 182, 179, 103, 35, 150, 68].
+DEBUG 2022-06-20 08:47:45.595: NodeIndex(1) Finalized round 12 with head [3, 93, 231, 88, 80, 172, 45, 20].
+DEBUG 2022-06-20 08:47:45.595: Got new batch. Finalized: 35
+DEBUG 2022-06-20 08:47:45.595: Got new batch. Finalized: 36
+DEBUG 2022-06-20 08:47:45.595: Got new batch. Finalized: 37
+DEBUG 2022-06-20 08:47:46.073: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:46.073: NodeIndex(1) New unit in Extender round 16 creator NodeIndex(1) hash [117, 201, 157, 120, 197, 113, 16, 125].
+DEBUG 2022-06-20 08:47:46.089: NodeIndex(1) New unit in Extender round 16 creator NodeIndex(2) hash [110, 1, 229, 133, 93, 157, 86, 194].
+DEBUG 2022-06-20 08:47:46.095: NodeIndex(1) New unit in Extender round 17 creator NodeIndex(0) hash [91, 16, 123, 109, 142, 210, 191, 151].
+DEBUG 2022-06-20 08:47:46.095: NodeIndex(1) Finalized round 13 with head [43, 111, 84, 253, 151, 138, 155, 33].
+DEBUG 2022-06-20 08:47:46.096: Got new batch. Finalized: 38
+DEBUG 2022-06-20 08:47:46.096: Got new batch. Finalized: 39
+DEBUG 2022-06-20 08:47:46.096: Got new batch. Finalized: 40
+DEBUG 2022-06-20 08:47:46.573: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:46.573: NodeIndex(1) New unit in Extender round 17 creator NodeIndex(1) hash [94, 200, 11, 165, 205, 52, 201, 127].
+DEBUG 2022-06-20 08:47:46.590: NodeIndex(1) New unit in Extender round 17 creator NodeIndex(2) hash [203, 188, 182, 241, 31, 46, 104, 122].
+DEBUG 2022-06-20 08:47:46.596: NodeIndex(1) New unit in Extender round 18 creator NodeIndex(0) hash [1, 154, 33, 21, 226, 76, 231, 63].
+DEBUG 2022-06-20 08:47:46.596: NodeIndex(1) Finalized round 14 with head [47, 123, 42, 55, 165, 16, 232, 113].
+DEBUG 2022-06-20 08:47:46.596: Got new batch. Finalized: 41
+DEBUG 2022-06-20 08:47:46.596: Got new batch. Finalized: 42
+DEBUG 2022-06-20 08:47:46.596: Got new batch. Finalized: 43
+DEBUG 2022-06-20 08:47:47.073: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:47.073: NodeIndex(1) New unit in Extender round 18 creator NodeIndex(1) hash [34, 18, 130, 23, 67, 253, 100, 55].
+DEBUG 2022-06-20 08:47:47.091: NodeIndex(1) New unit in Extender round 18 creator NodeIndex(2) hash [104, 98, 14, 136, 33, 171, 137, 134].
+DEBUG 2022-06-20 08:47:47.097: NodeIndex(1) New unit in Extender round 19 creator NodeIndex(0) hash [202, 222, 136, 126, 211, 226, 84, 165].
+DEBUG 2022-06-20 08:47:47.097: NodeIndex(1) Finalized round 15 with head [76, 29, 13, 115, 130, 245, 1, 241].
+DEBUG 2022-06-20 08:47:47.098: Got new batch. Finalized: 44
+DEBUG 2022-06-20 08:47:47.098: Got new batch. Finalized: 45
+DEBUG 2022-06-20 08:47:47.098: Got new batch. Finalized: 46
+DEBUG 2022-06-20 08:47:47.573: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:47.573: NodeIndex(1) New unit in Extender round 19 creator NodeIndex(1) hash [3, 251, 113, 123, 60, 78, 157, 110].
+DEBUG 2022-06-20 08:47:47.591: NodeIndex(1) New unit in Extender round 19 creator NodeIndex(2) hash [148, 49, 203, 181, 156, 63, 189, 244].
+DEBUG 2022-06-20 08:47:47.598: NodeIndex(1) New unit in Extender round 20 creator NodeIndex(0) hash [189, 75, 229, 183, 57, 190, 7, 214].
+DEBUG 2022-06-20 08:47:47.598: NodeIndex(1) Finalized round 16 with head [16, 65, 182, 179, 103, 35, 150, 68].
+DEBUG 2022-06-20 08:47:47.598: Got new batch. Finalized: 47
+DEBUG 2022-06-20 08:47:47.598: Got new batch. Finalized: 48
+DEBUG 2022-06-20 08:47:47.598: Got new batch. Finalized: 49
+DEBUG 2022-06-20 08:47:48.073: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:48.073: NodeIndex(1) New unit in Extender round 20 creator NodeIndex(1) hash [8, 206, 107, 16, 74, 90, 183, 133].
+DEBUG 2022-06-20 08:47:48.092: NodeIndex(1) New unit in Extender round 20 creator NodeIndex(2) hash [62, 213, 36, 8, 208, 194, 132, 217].
+DEBUG 2022-06-20 08:47:48.574: NodeIndex(1) On create notification.
+DEBUG 2022-06-20 08:47:48.574: NodeIndex(1) New unit in Extender round 21 creator NodeIndex(1) hash [150, 102, 9, 247, 21, 15, 164, 51].
+DEBUG 2022-06-20 08:47:48.574: NodeIndex(1) Finalized round 17 with head [91, 16, 123, 109, 142, 210, 191, 151].
+DEBUG 2022-06-20 08:47:48.574: Got new batch. Finalized: 50
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) exit channel was called.
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) Run ending.
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) Ending run.
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) All services stopping.
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) received exit signal
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) Terminal decided to exit.
+DEBUG 2022-06-20 08:47:48.574: NodeIndex(1) terminal stopped.
+INFO 2022-06-20 08:47:48.574: Incoming parent channel closed, exiting.
+DEBUG 2022-06-20 08:47:48.574: NodeIndex(1) creator stopped.
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) received exit signal.
+INFO 2022-06-20 08:47:48.574: NodeIndex(1) Extender decided to exit.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) extender stopped.
+INFO 2022-06-20 08:47:48.575: NodeIndex(1) All services stopped.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Consensus stopped.
+INFO 2022-06-20 08:47:48.575: NodeIndex(1) received exit signal
+INFO 2022-06-20 08:47:48.575: NodeIndex(1) Alerter decided to exit.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Alerter stopped.
+ERROR 2022-06-20 08:47:48.575: Outgoing alerts stream closed.
+ERROR 2022-06-20 08:47:48.575: NodeIndex(1) Ordered batch stream closed.
+INFO 2022-06-20 08:47:48.575: Network ended.
+INFO 2022-06-20 08:47:48.575: NodeIndex(1) Run ended.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Runway stopped.
+INFO 2022-06-20 08:47:48.575: NodeIndex(1) Runway ended.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Runway stopped.
+ERROR 2022-06-20 08:47:48.575: NodeIndex(1) Unit message stream from Runway closed.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Member stopped.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Member stopped.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Network-hub already stopped.
+DEBUG 2022-06-20 08:47:48.575: NodeIndex(1) Network stopped.
+INFO 2022-06-20 08:47:48.575: NodeIndex(1) Run ended.
