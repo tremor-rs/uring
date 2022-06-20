@@ -59,5 +59,4 @@ default-features = false
 #tide = { git = 'https://github.com/http-rs/tide' }
 
 [features]
-default = ["json-proto"]
-json-proto = []
+default = []

@@ -242,7 +242,7 @@ pub(crate) async fn run(
     loop {
         select! {
             cmd = cnc_rx.next() => handle_cmd(&logger, cmd, &mut state, &mut tasks_tx).await,
-            tick = ticks.next().fuse() =>  if ! handle_tick(&logger, &id, &mut state, &mut tasks, &cnc_tx).await {
+            _tick = ticks.next().fuse() =>  if ! handle_tick(&logger, &id, &mut state, &mut tasks, &cnc_tx).await {
                 break
             },
         }

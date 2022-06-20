@@ -39,7 +39,7 @@ type RemoteMailboxes = HashMap<NodeId, Sender<WsMessage>>;
 
 #[derive(Clone)]
 pub(crate) struct Node {
-    id: NodeId,
+    _id: NodeId,
     tx: UnboundedSender<UrMsg>,
     logger: Logger,
     pubsub: pubsub::Channel,
@@ -439,7 +439,7 @@ impl Network {
 
         let node = Node {
             tx: tx.clone(),
-            id,
+            _id: id,
             logger: logger.clone(),
             pubsub: pubsub.clone(),
         };
