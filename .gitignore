@@ -6,3 +6,4 @@ contrib/__pycache__
 coyote.html
 .DS_Store
 .vscode
+*.log

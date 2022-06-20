@@ -1,29 +1,44 @@
 [package]
-name = "uring2"
+name = "uring3"
 version = "0.1.0"
 edition = "2021"
+authors = [
+  "drdr xp <drdr.xp@gmail.com>",
+  "Pedro Paulo de Amorim <pepa.amorim@gmail.com>",
+]
+categories = ["algorithms", "asynchronous", "data-structures"]
+description = "An example distributed key-value store built upon `openraft`."
+homepage = "https://github.com/datafuselabs/openraft"
+keywords = ["raft", "consensus"]
+license = "MIT/Apache-2.0"
+repository = "https://github.com/datafuselabs/openraft"
+readme = "README.md"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "uring3"
+path = "src/bin/main.rs"
 
 [dependencies]
-openraft = { git = "https://github.com/datafuselabs/openraft.git", branch = "main" }
-async-std = { version = "1.11.0", features = [
-  "unstable",
-  "tokio1",
-  "attributes",
+actix-web = "4.0.0-rc.2"
+async-trait = "0.1.36"
+clap = { version = "3.0.13", features = ["derive", "env"] }
+env_logger = "0.9.0"
+openraft = { git = "https://github.com/datafuselabs/openraft.git", branch = "main", features = [
+  "serde",
 ] }
-async-trait = "0.1"
-serde = "1.0.137"
-anyhow = "1.0.57"
-thiserror = "1.0.31"
-tracing = "0.1.34"
-tracing-subscriber = "*"
-serde_json = "1.0.81"
-toy-rpc = { version = "*", features = [
-  "async_std_runtime",
-  "ws_async_std",
-  "server",
-  "client",
-] }
-clap = "*"
-dashmap = "*"
+reqwest = { version = "0.11.9", features = ["json"] }
+serde = { version = "1.0.114", features = ["derive"] }
+serde_json = "1.0.57"
+tokio = { version = "1.0", default-features = false, features = ["sync"] }
+tracing = "0.1.29"
+tracing-futures = "0.2.4"
+
+[dev-dependencies]
+anyhow = "1.0.32"
+maplit = "1.0.2"
+
+[features]
+docinclude = [] # Used only for activating `doc(include="...")` on nightly.
+
+[package.metadata.docs.rs]
+features = ["docinclude"] # Activate `docinclude` during docs.rs build.

@@ -1,180 +1,128 @@
-# uring &emsp; ![Build Status] ![Quality Checks] ![License Checks] ![Security Checks] [![Code Coverage]][codecov.io]
+# Example distributed key-value store built upon openraft.
 
-[Build Status]: https://github.com/wayfair-incubator/uring/workflows/Tests/badge.svg
-[Quality Checks]: https://github.com/wayfair-incubator/uring/workflows/Checks/badge.svg
-[License Checks]: https://github.com/wayfair-incubator/uring/workflows/License%20audit/badge.svg
-[Security Checks]: https://github.com/wayfair-incubator/uring/workflows/Security%20audit/badge.svg
-[Code Coverage]: https://codecov.io/gh/wayfair-incubator/uring/branch/main/graph/badge.svg
-[codecov.io]: https://codecov.io/gh/wayfair-incubator/uring
+It is an example of how to build a real-world key-value store with `openraft`.
+Includes:
+- An in-memory `RaftStorage` implementation [store](./src/store/store.rs).
 
-**RAFT spike based on the raft-rs framework that powers tikv/tidb to evaluate adopting raft-rs.**
+- A server is based on [actix-web](https://docs.rs/actix-web/4.0.0-rc.2).  
+  Includes:
+  - raft-internal network APIs for replication and voting.
+  - Admin APIs to add nodes, change-membership etc.
+  - Application APIs to write a value by key or read a value by key.
 
----
+- Client and `RaftNetwork`([rpc](./src/network/raft_network_impl)) are built upon [reqwest](https://docs.rs/reqwest).
 
-```bash
-# start first node and clear current cache
-rm -rf raft-rocks-*
-cargo run -- -e 127.0.0.1:8081 -p 127.0.0.1:8082 -p 127.0.0.1:8083 -i1 -n --http 127.0.0.1:9081  -b -r 64
-# join second node
-cargo run -- -e 127.0.0.1:8082 -p 127.0.0.1:8081 -p 127.0.0.1:8083 -i2 -n --http 127.0.0.1:9082
-# join third node
-cargo run -- -e 127.0.0.1:8083 -p 127.0.0.1:8081 -p 127.0.0.1:8082 -i3 -n --http 127.0.0.1:9083
-# activate nodes in raft group (triggers AddNode message)
-curl -v -X POST http://127.0.0.1:9081/uring/2
-curl -v -X POST http://127.0.0.1:9081/uring/3
+  [ExampleClient](./src/client.rs) is a minimal raft client in rust to talk to a raft cluster.
+  - It includes application API `write()` and `read()`, and administrative API `init()`, `add_learner()`, `change_membership()`, `metrics()`.
+  - This client tracks the last known leader id, a write operation(such as `write()` or `change_membership()`) will be redirected to the leader on client side.
 
-# kill node 1
-# restart node 1
-cargo run -- -e 127.0.0.1:8081 -i 1 -p 127.0.0.1:8082
-# kill new leader
-# restart new leader
-# kill  new leader
-...
+## Run it
+
+There is a example in bash script and an example in rust:
+
+- [test-cluster.sh](./test-cluster.sh) shows a simulation of 3 nodes running and sharing data,
+  It only uses `curl` and shows the communication between a client and the cluster in plain HTTP messages.
+  You can run the cluster demo with:
+
+  ```shell
+  ./test-cluster.sh
+  ```
+
+- [test_cluster.rs](./tests/cluster/test_cluster.rs) does almost the same as `test-cluster.sh` but in rust
+  with the `ExampleClient`.
+
+  Run it with `cargo test`.
+
+
+if you want to compile the application, run:
+
+```shell
+cargo build
 ```
 
-## Alternate startup procedure
+(If you append `--release` to make it compile in production, but we don't recommend to use
+this project in production yet.)
 
-```bash
-PYTHONPATH=. ./bin/3u.py # spin up a nascent 3-node test cluster
+## What the test script does
+
+To run it, get the binary `raft-key-value` inside `target/debug` and run:
+
+```shell
+./raft-key-value --id 1 --http-addr 127.0.0.1:21001
 ```
 
-For dependencies ( if needed )
+It will start a node.
 
-```bash
-pip3 install -r ./requirements.txt
+To start the following nodes:
+
+```shell
+./raft-key-value --id 2 --http-addr 127.0.0.1:21002
 ```
 
-To output formatted pretty-printed json logs:
+You can continue replicating the nodes by changing the `id` and `http-addr`.
 
-```bash
-PYTHONPATH=. ./bin/3u.py 2>&1 | jq -R 'fromjson?'
-```
-
-## Acceptance tests
-
-```bash
-go get -u github.com/landoop/coyote
-PYTHONPATH=. bin/3u.py
-coyote -c contrib/3u-test.yml
-```
-
-To view test report:
-
-```bash
-python -m SimpleHTTPServer
-open http://localhost:8000/coyote.html
-```
-
-## vnode
-
-```bash
-curl -H 'Content-Type: application/json' -X GET http://localhost:9081/mring
-curl -H 'Content-Type: application/json' -X POST -d '{"size":64}' http://localhost:9081/mring
-curl -H 'Content-Type: application/json' -X POST -d '{"node":"n1"}' http://localhost:9081/mring/node
-curl -H 'Content-Type: application/json' -X GET http://localhost:9081/mring/node
-curl -H 'Content-Type: application/json' -X POST -d '{"node":"n2"}' http://localhost:9081/mring/node
-```
-
-## ws - kv
-
-```bash
-websocat ws://localhost:8081/uring
-
-{"Select": {"rid": 1, "protocol": "KV"}}
-
-{"Get": {"rid": 2, "key": "snot"}}
-
-{"Put": {"rid": 3, "key": "snot", "store": "badger"}}
-
-{"Get": {"rid": 2, "key": "snot"}}
-
-{"Put": {"rid": 3, "key": "snot", "store": "badger2"}}
-
-{"Delete": {"rid": 2, "key": "snot"}}
-
-{"Get": {"rid": 2, "key": "snot"}}
-```
-
-```bash
-{"Subscribe": {"channel": "kv"}}
-{"As": {"protocol": "KV", "cmd": {"Get": {"rid": 2, "key": "snot"}}}}
-
-{"As": {"protocol": "KV", "cmd": {"Put": {"rid": 3, "key": "snot", "store": "badger"}}}}
-```
-
-## ws - mring
-
-```bash
-websocat ws://localhost:8081/uring
-
-{"Select": {"rid": 1, "protocol": "MRing"}}
-
-{"GetSize": {"rid": 2}}
-
-{"SetSize": {"rid": 3, "size": 32}}
-
-{"GetSize": {"rid": 2}}
-
-{"AddNode": {"rid": 3, "node": "127.0.0.1:8181"}}
-{"AddNode": {"rid": 3, "node": "127.0.0.1:8182"}}
-{"AddNode": {"rid": 3, "node": "127.0.0.1:8183"}}
-
-{"RemoveNode": {"rid": 3, "node": "127.0.0.1:8182"}}
+After that, call the first node created:
 
 ```
-
-## ws - pubsub
-
-```bash
-websocat ws://localhost:8081/uring
-
-{"Subscribe": {"channel": "kv"}}
-{"Subscribe": {"channel": "mring"}}
-{"Subscribe": {"channel": "uring"}}
+POST - 127.0.0.1:21001/init
 ```
 
-## ws - version
+It will define the first node created as the leader.
 
-```bash
- websocat ws://127.0.0.1:8081/uring
+Then you need to inform to the leader that these nodes are learners:
 
-{"Select": {"rid": 1, "protocol": "Version" }}
-{"Selected":{"rid":1,"protocol":"Version"}}
-{"Get": {"rid": 1}}
-{"rid":1,"data":"0.1.0"}
+```
+POST - 127.0.0.1:21001/add-learner '[2, "127.0.0.1:21002"]'
+POST - 127.0.0.1:21001/add-learner '[3, "127.0.0.1:21003"]'
 ```
 
-## ws - status
+Now you need to tell the leader to add all learners as members of the cluster:
 
-```bash
-websocat ws://127.0.0.1:8081/uring
-
-{"Select": {"rid": 1, "protocol": "Status" }}
-{"Selected":{"rid":1,"protocol":"Status"}}
-{"Get": {"rid": 1}}
-{"rid":1,"data":{"election_elapsed":1,"id":1,"last_index":9,"pass_election_timeout":false,"promotable":true,"randomized_election_timeout":13,"role":"Leader","term":2}}
+```
+POST - 127.0.0.1:21001/change-membership  "[1, 2, 3]"
 ```
 
-## python client example
+Write some data in any of the nodes:
 
-```python
-#!/usr/bin/env python3
-import contrib
-import time
-
-rc = contrib.RaftClient()
-rc.set_host('127.0.0.1')
-rc.set_port(8081)
-rc.ws_start()
-
-def report(subject,json):
-    print("{} Event: {}".format(subject, json))
-
-time.sleep(1)
-rc.subscribe('kv', lambda json: report('KV', json))
-rc.subscribe('mring', lambda json: report('MRing', json))
-rc.subscribe('uring', lambda json: report('URing', json))
-
-while True:
-    time.sleep(1)
 ```
+POST - 127.0.0.1:21001/write  "{"Set":{"key":"foo","value":"bar"}}"
+```
+
+Read the data from any node:
+
+```
+POST - 127.0.0.1:21002/read  "foo"
+```
+
+You should be able to read that on the another instance even if you did not sync any data!
+
+
+## How it's structured.
+
+The application is separated in 4 modules:
+
+ - `bin`: You can find the `main()` function in [main](./src/bin/main.rs) the file where the setup for the server happens.
+ - `network`: You can find the [api](./src/network/api.rs) that implements the endpoints used by the public API and [rpc](./src/network/raft_network_impl) where all the raft communication from the node happens. [management](./src/network/management.rs) is where all the administration endpoints are present, those are used to add orremove nodes, promote and more. [raft](./src/network/raft.rs) is where all the communication are received from other nodes.
+ - `store`: You can find the file [store](./src/store/mod.rs) where all the key-value implementation is done. Here is where your data application will be managed.
+
+## Where is my data?
+
+The data is store inside state machines, each state machine represents a point of data and
+raft enforces that all nodes have the same data in synchronization. You can have a look of
+the struct [ExampleStateMachine](./src/store/mod.rs)
+
+## Cluster management
+
+The raft itself does not store node addresses.
+But in a real-world application, the implementation of `RaftNetwork` needs to know the addresses.
+
+Thus, in this example application:
+
+- The storage layer has to store nodes' information.
+- The network layer keeps a reference to the store so that it is able to get the address of a target node to send RPC to.
+
+To add a node to a cluster, it includes 3 steps:
+
+- Write a `node` through raft protocol to the storage.
+- Add the node as a `Learner` to let it start receiving replication data from the leader.
+- Invoke `change-membership` to change the learner node to a member.
