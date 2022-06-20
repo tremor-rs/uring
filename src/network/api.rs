@@ -1,16 +1,15 @@
-use actix_web::post;
-use actix_web::web;
-use actix_web::web::Data;
-use actix_web::Responder;
-use openraft::error::CheckIsLeaderError;
-use openraft::error::Infallible;
-use openraft::raft::ClientWriteRequest;
-use openraft::EntryPayload;
+use crate::{app::ExampleApp, store::ExampleRequest, ExampleNodeId};
+use actix_web::{
+    post,
+    web::{self, Data},
+    Responder,
+};
+use openraft::{
+    error::{CheckIsLeaderError, Infallible},
+    raft::ClientWriteRequest,
+    EntryPayload,
+};
 use web::Json;
-
-use crate::app::ExampleApp;
-use crate::store::ExampleRequest;
-use crate::ExampleNodeId;
 
 /**
  * Application API
@@ -22,7 +21,10 @@ use crate::ExampleNodeId;
  *  - `POST - /read` attempt to find a value from a given key.
  */
 #[post("/write")]
-pub async fn write(app: Data<ExampleApp>, req: Json<ExampleRequest>) -> actix_web::Result<impl Responder> {
+pub async fn write(
+    app: Data<ExampleApp>,
+    req: Json<ExampleRequest>,
+) -> actix_web::Result<impl Responder> {
     let request = ClientWriteRequest::new(EntryPayload::Normal(req.0));
     let response = app.raft.client_write(request).await;
     Ok(Json(response))
@@ -39,7 +41,10 @@ pub async fn read(app: Data<ExampleApp>, req: Json<String>) -> actix_web::Result
 }
 
 #[post("/consistent_read")]
-pub async fn consistent_read(app: Data<ExampleApp>, req: Json<String>) -> actix_web::Result<impl Responder> {
+pub async fn consistent_read(
+    app: Data<ExampleApp>,
+    req: Json<String>,
+) -> actix_web::Result<impl Responder> {
     let ret = app.raft.is_leader().await;
 
     match ret {
@@ -48,7 +53,8 @@ pub async fn consistent_read(app: Data<ExampleApp>, req: Json<String>) -> actix_
             let key = req.0;
             let value = state_machine.data.get(&key).cloned();
 
-            let res: Result<String, CheckIsLeaderError<ExampleNodeId>> = Ok(value.unwrap_or_default());
+            let res: Result<String, CheckIsLeaderError<ExampleNodeId>> =
+                Ok(value.unwrap_or_default());
             Ok(Json(res))
         }
         Err(e) => Ok(Json(Err(e))),

@@ -1,19 +1,12 @@
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-
-use actix_web::get;
-use actix_web::post;
-use actix_web::web;
-use actix_web::web::Data;
-use actix_web::Responder;
-use openraft::error::Infallible;
-use openraft::Node;
-use openraft::RaftMetrics;
+use crate::{app::ExampleApp, ExampleNodeId, ExampleTypeConfig};
+use actix_web::{
+    get, post,
+    web::{self, Data},
+    Responder,
+};
+use openraft::{error::Infallible, Node, RaftMetrics};
+use std::collections::{BTreeMap, BTreeSet};
 use web::Json;
-
-use crate::app::ExampleApp;
-use crate::ExampleNodeId;
-use crate::ExampleTypeConfig;
 
 // --- Cluster management
 
@@ -50,10 +43,13 @@ pub async fn change_membership(
 #[post("/init")]
 pub async fn init(app: Data<ExampleApp>) -> actix_web::Result<impl Responder> {
     let mut nodes = BTreeMap::new();
-    nodes.insert(app.id, Node {
-        addr: app.addr.clone(),
-        data: Default::default(),
-    });
+    nodes.insert(
+        app.id,
+        Node {
+            addr: app.addr.clone(),
+            data: Default::default(),
+        },
+    );
     let res = app.raft.initialize(nodes).await;
     Ok(Json(res))
 }

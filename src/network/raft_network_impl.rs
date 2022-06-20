@@ -1,24 +1,16 @@
+use crate::{ExampleNodeId, ExampleTypeConfig};
 use async_trait::async_trait;
-use openraft::error::AppendEntriesError;
-use openraft::error::InstallSnapshotError;
-use openraft::error::NetworkError;
-use openraft::error::RPCError;
-use openraft::error::RemoteError;
-use openraft::error::VoteError;
-use openraft::raft::AppendEntriesRequest;
-use openraft::raft::AppendEntriesResponse;
-use openraft::raft::InstallSnapshotRequest;
-use openraft::raft::InstallSnapshotResponse;
-use openraft::raft::VoteRequest;
-use openraft::raft::VoteResponse;
-use openraft::Node;
-use openraft::RaftNetwork;
-use openraft::RaftNetworkFactory;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-
-use crate::ExampleNodeId;
-use crate::ExampleTypeConfig;
+use openraft::{
+    error::{
+        AppendEntriesError, InstallSnapshotError, NetworkError, RPCError, RemoteError, VoteError,
+    },
+    raft::{
+        AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest,
+        InstallSnapshotResponse, VoteRequest, VoteResponse,
+    },
+    Node, RaftNetwork, RaftNetworkFactory,
+};
+use serde::{de::DeserializeOwned, Serialize};
 
 pub struct ExampleNetwork {}
 
@@ -40,9 +32,17 @@ impl ExampleNetwork {
         let url = format!("http://{}/{}", addr, uri);
         let client = reqwest::Client::new();
 
-        let resp = client.post(url).json(&req).send().await.map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
+        let resp = client
+            .post(url)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
 
-        let res: Result<Resp, Err> = resp.json().await.map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
+        let res: Result<Resp, Err> = resp
+            .json()
+            .await
+            .map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
 
         res.map_err(|e| RPCError::RemoteError(RemoteError::new(target, e)))
     }
@@ -73,22 +73,34 @@ impl RaftNetwork<ExampleTypeConfig> for ExampleNetworkConnection {
     async fn send_append_entries(
         &mut self,
         req: AppendEntriesRequest<ExampleTypeConfig>,
-    ) -> Result<AppendEntriesResponse<ExampleNodeId>, RPCError<ExampleNodeId, AppendEntriesError<ExampleNodeId>>> {
-        self.owner.send_rpc(self.target, self.target_node.as_ref(), "raft-append", req).await
+    ) -> Result<
+        AppendEntriesResponse<ExampleNodeId>,
+        RPCError<ExampleNodeId, AppendEntriesError<ExampleNodeId>>,
+    > {
+        self.owner
+            .send_rpc(self.target, self.target_node.as_ref(), "raft-append", req)
+            .await
     }
 
     async fn send_install_snapshot(
         &mut self,
         req: InstallSnapshotRequest<ExampleTypeConfig>,
-    ) -> Result<InstallSnapshotResponse<ExampleNodeId>, RPCError<ExampleNodeId, InstallSnapshotError<ExampleNodeId>>>
-    {
-        self.owner.send_rpc(self.target, self.target_node.as_ref(), "raft-snapshot", req).await
+    ) -> Result<
+        InstallSnapshotResponse<ExampleNodeId>,
+        RPCError<ExampleNodeId, InstallSnapshotError<ExampleNodeId>>,
+    > {
+        self.owner
+            .send_rpc(self.target, self.target_node.as_ref(), "raft-snapshot", req)
+            .await
     }
 
     async fn send_vote(
         &mut self,
         req: VoteRequest<ExampleNodeId>,
-    ) -> Result<VoteResponse<ExampleNodeId>, RPCError<ExampleNodeId, VoteError<ExampleNodeId>>> {
-        self.owner.send_rpc(self.target, self.target_node.as_ref(), "raft-vote", req).await
+    ) -> Result<VoteResponse<ExampleNodeId>, RPCError<ExampleNodeId, VoteError<ExampleNodeId>>>
+    {
+        self.owner
+            .send_rpc(self.target, self.target_node.as_ref(), "raft-vote", req)
+            .await
     }
 }

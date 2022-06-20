@@ -1,21 +1,15 @@
+use crate::{
+    app::ExampleApp,
+    network::{api, management, raft, raft_network_impl::ExampleNetwork},
+    store::{ExampleRequest, ExampleResponse, ExampleStore},
+};
+use actix_web::{
+    middleware::{self, Logger},
+    web::Data,
+    App, HttpServer,
+};
+use openraft::{Config, Raft};
 use std::sync::Arc;
-
-use actix_web::middleware;
-use actix_web::middleware::Logger;
-use actix_web::web::Data;
-use actix_web::App;
-use actix_web::HttpServer;
-use openraft::Config;
-use openraft::Raft;
-
-use crate::app::ExampleApp;
-use crate::network::api;
-use crate::network::management;
-use crate::network::raft;
-use crate::network::raft_network_impl::ExampleNetwork;
-use crate::store::ExampleRequest;
-use crate::store::ExampleResponse;
-use crate::store::ExampleStore;
 
 pub mod app;
 pub mod client;

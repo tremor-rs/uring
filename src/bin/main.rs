@@ -1,10 +1,10 @@
 use clap::Parser;
 use env_logger::Env;
 use openraft::Raft;
-use uring3::network::raft_network_impl::ExampleNetwork;
-use uring3::start_example_raft_node;
-use uring3::store::ExampleStore;
-use uring3::ExampleTypeConfig;
+use uring3::{
+    network::raft_network_impl::ExampleNetwork, start_example_raft_node, store::ExampleStore,
+    ExampleTypeConfig,
+};
 
 pub type ExampleRaft = Raft<ExampleTypeConfig, ExampleNetwork, ExampleStore>;
 
