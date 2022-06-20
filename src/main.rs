@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 // We use anyhow::Result in our impl below.
 use anyhow::Result;
 use toy_rpc::Server;
+use tracing::info;
 mod memstore;
 mod network;
 
@@ -45,6 +46,7 @@ async fn main() {
     // Get our node's ID from stable storage.
     let node_id = get_id_from_storage().await;
 
+    info!("Starting node {node_id}");
     // Build our Raft runtime config, then instantiate our
     // RaftNetwork & RaftStorage impls.
     let config = Arc::new(
@@ -73,6 +75,8 @@ async fn get_id_from_storage() -> u64 {
 
 async fn run_app(node_id: u64, raft: MemRaft) {
     let addr = format!("127.0.0.1:{}", 10000 + node_id);
+    info!("Node address: {addr}");
+
     let mut members = HashSet::new();
 
     let nodes: Vec<_> = env::args()
@@ -82,11 +86,22 @@ async fn run_app(node_id: u64, raft: MemRaft) {
     for nid in nodes {
         members.insert(nid);
     }
+
+    info!("Peers: {members:?}");
+    info!("delay startup ...");
     async_std::task::sleep(Duration::from_secs(5)).await;
+    info!("... Starting");
     raft.initialize(members)
         .await
         .expect("oh no initialize failed");
 
+    let mut metrics = raft.metrics();
+    task::spawn(async move {
+        loop {
+            metrics.changed().await.unwrap();
+            info!("Metrics: {:?}", metrics.borrow());
+        }
+    });
     let raft = TremorRaft::new(raft);
     let raft_server = Arc::new(raft);
 
@@ -94,6 +109,7 @@ async fn run_app(node_id: u64, raft: MemRaft) {
     let listener = TcpListener::bind(addr).await.unwrap();
 
     let handle = task::spawn(async move {
+        info!("Accept task started");
         server.accept(listener).await.unwrap();
     });
     handle.await;

@@ -10,7 +10,7 @@ use async_raft::{
 use async_trait::async_trait;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{fmt::Display, sync::Arc};
 use toy_rpc::macros::export_impl;
 use toy_rpc::{
     client::{Call, Client},
@@ -48,6 +48,7 @@ impl TremorRaft {
         req: AppendEntriesRequest<ClientRequest>,
     ) -> Result<AppendEntriesResponse, Error> {
         info!("append_entries");
+        dbg!(&req);
         let res = self
             .raft
             .append_entries(req)
@@ -86,6 +87,7 @@ impl RaftRouter {
     async fn init_client(&self, node_id: u64) -> AResult<()> {
         if !self.clients.contains_key(&node_id) {
             let addr = format!("127.0.0.1:{}", 10000 + node_id);
+            info!("New client: {addr}");
             let client = Client::dial(addr).await?;
             self.clients.insert(node_id, client);
         }
