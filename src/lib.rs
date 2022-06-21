@@ -3,11 +3,6 @@ use crate::{
     network::{api, management, raft, raft_network_impl::ExampleNetwork},
     store::{ExampleRequest, ExampleResponse, ExampleStore},
 };
-use actix_web::{
-    middleware::{self, Logger},
-    web::Data,
-    App, HttpServer,
-};
 use openraft::{Config, Raft};
 use std::sync::Arc;
 
@@ -24,7 +19,7 @@ openraft::declare_raft_types!(
 );
 
 pub type ExampleRaft = Raft<ExampleTypeConfig, ExampleNetwork, Arc<ExampleStore>>;
-
+type Server = tide::Server<Arc<ExampleApp>>;
 pub async fn start_example_raft_node(
     node_id: ExampleNodeId,
     http_addr: String,
@@ -44,37 +39,17 @@ pub async fn start_example_raft_node(
 
     // Create an application that will store all the instances created above, this will
     // be later used on the actix-web services.
-    let app = Data::new(ExampleApp {
+    let mut app: Server = tide::Server::with_state(Arc::new(ExampleApp {
         id: node_id,
         addr: http_addr.clone(),
         raft,
         store,
         config,
-    });
+    }));
 
-    // Start the actix-web server.
-    let server = HttpServer::new(move || {
-        App::new()
-            .wrap(Logger::default())
-            .wrap(Logger::new("%a %{User-Agent}i"))
-            .wrap(middleware::Compress::default())
-            .app_data(app.clone())
-            // raft internal RPC
-            .service(raft::append)
-            .service(raft::snapshot)
-            .service(raft::vote)
-            // admin API
-            .service(management::init)
-            .service(management::add_learner)
-            .service(management::change_membership)
-            .service(management::metrics)
-            // application API
-            .service(api::write)
-            .service(api::read)
-            .service(api::consistent_read)
-    });
+    raft::rest(&mut app);
+    management::rest(&mut app);
+    api::rest(&mut app);
 
-    let x = server.bind(http_addr)?;
-
-    x.run().await
+    app.listen(http_addr).await
 }

@@ -18,7 +18,7 @@ pub struct Opt {
     pub http_addr: String,
 }
 
-#[actix_web::main]
+#[async_std::main]
 async fn main() -> std::io::Result<()> {
     // Setup the logger
     env_logger::init_from_env(Env::default().default_filter_or("info"));

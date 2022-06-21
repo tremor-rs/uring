@@ -1,38 +1,34 @@
-use actix_web::{
-    post,
-    web::{self, Data},
-    Responder,
-};
-use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
-use web::Json;
-
-use crate::{app::ExampleApp, ExampleNodeId, ExampleTypeConfig};
+use crate::{app::ExampleApp, Server};
+use std::sync::Arc;
+use tide::{Body, Request, Response, StatusCode};
 
 // --- Raft communication
 
-#[post("/raft-vote")]
-pub async fn vote(
-    app: Data<ExampleApp>,
-    req: Json<VoteRequest<ExampleNodeId>>,
-) -> actix_web::Result<impl Responder> {
-    let res = app.raft.vote(req.0).await;
-    Ok(Json(res))
+pub fn rest(app: &mut Server) {
+    app.at("/raft-vote").post(vote);
+    app.at("/raft-append").post(append);
+    app.at("/raft-snapshot").post(snapshot);
+}
+async fn vote(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
+    let body = req.body_json().await?;
+    let res = req.state().raft.vote(body).await;
+    Ok(Response::builder(StatusCode::Ok)
+        .body(Body::from_json(&res)?)
+        .build())
 }
 
-#[post("/raft-append")]
-pub async fn append(
-    app: Data<ExampleApp>,
-    req: Json<AppendEntriesRequest<ExampleTypeConfig>>,
-) -> actix_web::Result<impl Responder> {
-    let res = app.raft.append_entries(req.0).await;
-    Ok(Json(res))
+async fn append(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
+    let body = req.body_json().await?;
+    let res = req.state().raft.append_entries(body).await;
+    Ok(Response::builder(StatusCode::Ok)
+        .body(Body::from_json(&res)?)
+        .build())
 }
 
-#[post("/raft-snapshot")]
-pub async fn snapshot(
-    app: Data<ExampleApp>,
-    req: Json<InstallSnapshotRequest<ExampleTypeConfig>>,
-) -> actix_web::Result<impl Responder> {
-    let res = app.raft.install_snapshot(req.0).await;
-    Ok(Json(res))
+async fn snapshot(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
+    let body = req.body_json().await?;
+    let res = req.state().raft.install_snapshot(body).await;
+    Ok(Response::builder(StatusCode::Ok)
+        .body(Body::from_json(&res)?)
+        .build())
 }

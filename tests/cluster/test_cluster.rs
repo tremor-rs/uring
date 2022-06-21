@@ -1,12 +1,12 @@
 use std::thread;
 use std::time::Duration;
 
+use async_std::task::block_on;
 use maplit::btreemap;
 use maplit::btreeset;
 use openraft::error::NodeNotFound;
 use openraft::AnyError;
 use openraft::Node;
-use tokio::runtime::Runtime;
 use uring3::client::ExampleClient;
 use uring3::start_example_raft_node;
 use uring3::store::ExampleRequest;
@@ -14,7 +14,7 @@ use uring3::ExampleNodeId;
 
 /// Setup a cluster of 3 nodes.
 /// Write to it and read from it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[async_std::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster() -> anyhow::Result<()> {
     // --- The client itself does not store addresses for all nodes, but just node id.
     //     Thus we need a supporting component to provide mapping from node id to node address.
@@ -38,34 +38,28 @@ async fn test_cluster() -> anyhow::Result<()> {
     // --- Start 3 raft node in 3 threads.
 
     let _h1 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x =
-            rt.block_on(
-                async move { start_example_raft_node(1, "127.0.0.1:21001".to_string()).await },
-            );
+        let x = block_on(
+            async move { start_example_raft_node(1, "127.0.0.1:21001".to_string()).await },
+        );
         println!("x: {:?}", x);
     });
 
     let _h2 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x =
-            rt.block_on(
-                async move { start_example_raft_node(2, "127.0.0.1:21002".to_string()).await },
-            );
+        let x = block_on(
+            async move { start_example_raft_node(2, "127.0.0.1:21002".to_string()).await },
+        );
         println!("x: {:?}", x);
     });
 
     let _h3 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x =
-            rt.block_on(
-                async move { start_example_raft_node(3, "127.0.0.1:21003".to_string()).await },
-            );
+        let x = block_on(
+            async move { start_example_raft_node(3, "127.0.0.1:21003".to_string()).await },
+        );
         println!("x: {:?}", x);
     });
 
     // Wait for server to start up.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    async_std::task::sleep(Duration::from_millis(200)).await;
 
     // --- Create a client to the first node, as a control handle to the cluster.
 
@@ -140,7 +134,7 @@ async fn test_cluster() -> anyhow::Result<()> {
 
     // --- Wait for a while to let the replication get done.
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    async_std::task::sleep(Duration::from_millis(200)).await;
 
     // --- Read it on every node.
 
@@ -168,7 +162,7 @@ async fn test_cluster() -> anyhow::Result<()> {
         })
         .await?;
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    async_std::task::sleep(Duration::from_millis(200)).await;
 
     // --- Read it on every node.
 

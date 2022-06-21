@@ -5,6 +5,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use async_std::sync::RwLock;
 use openraft::async_trait::async_trait;
 use openraft::storage::LogState;
 use openraft::storage::Snapshot;
@@ -25,7 +26,6 @@ use openraft::StorageIOError;
 use openraft::Vote;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::sync::RwLock;
 
 use crate::ExampleNodeId;
 use crate::ExampleTypeConfig;

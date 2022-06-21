@@ -52,15 +52,15 @@ sleep 1
 
 echo "Start 3 uninitialized uring3 servers..."
 
-nohup ${bin} value  --id 1 --http-addr 127.0.0.1:21001 > n1.log &
+nohup ${bin} --id 1 --http-addr 127.0.0.1:21001 > n1.log &
 sleep 1
 echo "Server 1 started"
 
-nohup ${bin} value  --id 2 --http-addr 127.0.0.1:21002 > n2.log &
+nohup ${bin} --id 2 --http-addr 127.0.0.1:21002 > n2.log &
 sleep 1
 echo "Server 2 started"
 
-nohup ${bin} value  --id 3 --http-addr 127.0.0.1:21003 > n3.log &
+nohup ${bin} --id 3 --http-addr 127.0.0.1:21003 > n3.log &
 sleep 1
 echo "Server 3 started"
 sleep 1
