@@ -5,9 +5,10 @@ use tide::{Body, Request, Response, StatusCode};
 // --- Raft communication
 
 pub fn rest(app: &mut Server) {
-    app.at("/raft-vote").post(vote);
-    app.at("/raft-append").post(append);
-    app.at("/raft-snapshot").post(snapshot);
+    let mut raft = app.at("/raft");
+    raft.at("/vote").post(vote);
+    raft.at("/append").post(append);
+    raft.at("/snapshot").post(snapshot);
 }
 async fn vote(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
     let body = req.body_json().await?;

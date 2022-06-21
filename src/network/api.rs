@@ -8,9 +8,10 @@ use std::sync::Arc;
 use tide::{Body, Request, Response, StatusCode};
 
 pub fn rest(app: &mut Server) {
-    app.at("/write").post(write);
-    app.at("/read").post(read);
-    app.at("/consistent_read").post(consistent_read);
+    let mut api = app.at("/api");
+    api.at("/write").post(write);
+    api.at("/read").post(read);
+    api.at("/consistent_read").post(consistent_read);
 }
 /**
  * Application API

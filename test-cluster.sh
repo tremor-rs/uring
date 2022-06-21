@@ -68,7 +68,7 @@ sleep 1
 echo "Initialize server 1 as a single-node cluster"
 sleep 2
 echo
-rpc 21001/init '{}'
+rpc 21001/cluster/init '{}'
 
 echo "Server 1 is a leader now"
 
@@ -77,7 +77,7 @@ sleep 2
 echo "Get metrics from the leader"
 sleep 2
 echo
-rpc 21001/metrics
+rpc 21001/cluster/metrics
 sleep 1
 
 
@@ -85,23 +85,23 @@ echo "Adding node 2 and node 3 as learners, to receive log from leader node 1"
 
 sleep 1
 echo
-rpc 21001/add-learner       '[2, "127.0.0.1:21002"]'
+rpc 21001/cluster/add-learner       '[2, "127.0.0.1:21002"]'
 echo "Node 2 added as leaner"
 sleep 1
 echo
-rpc 21001/add-learner       '[3, "127.0.0.1:21003"]'
+rpc 21001/cluster/add-learner       '[3, "127.0.0.1:21003"]'
 echo "Node 3 added as leaner"
 sleep 1
 
 echo "Get metrics from the leader, after adding 2 learners"
 sleep 2
 echo
-rpc 21001/metrics
+rpc 21001/cluster/metrics
 sleep 1
 
 echo "Changing membership from [1] to 3 nodes cluster: [1, 2, 3]"
 echo
-rpc 21001/change-membership '[1, 2, 3]'
+rpc 21001/cluster/change-membership '[1, 2, 3]'
 sleep 1
 echo "Membership changed"
 sleep 1
@@ -109,13 +109,13 @@ sleep 1
 echo "Get metrics from the leader again"
 sleep 1
 echo
-rpc 21001/metrics
+rpc 21001/cluster/metrics
 sleep 1
 
 echo "Write data on leader"
 sleep 1
 echo
-rpc 21001/write '{"Set":{"key":"foo","value":"bar"}}'
+rpc 21001/api/write '{"Set":{"key":"foo","value":"bar"}}'
 sleep 1
 echo "Data written"
 sleep 1
@@ -124,13 +124,13 @@ echo "Read on every node, including the leader"
 sleep 1
 echo "Read from node 1"
 echo
-rpc 21001/read  '"foo"'
+rpc 21001/api/read  '"foo"'
 echo "Read from node 2"
 echo
-rpc 21002/read  '"foo"'
+rpc 21002/api/read  '"foo"'
 echo "Read from node 3"
 echo
-rpc 21003/read  '"foo"'
+rpc 21003/api/read  '"foo"'
 
 echo "Killing all nodes in 3s..."
 sleep 1

@@ -78,7 +78,7 @@ impl RaftNetwork<ExampleTypeConfig> for ExampleNetworkConnection {
         RPCError<ExampleNodeId, AppendEntriesError<ExampleNodeId>>,
     > {
         self.owner
-            .send_rpc(self.target, self.target_node.as_ref(), "raft-append", req)
+            .send_rpc(self.target, self.target_node.as_ref(), "raft/append", req)
             .await
     }
 
@@ -90,7 +90,7 @@ impl RaftNetwork<ExampleTypeConfig> for ExampleNetworkConnection {
         RPCError<ExampleNodeId, InstallSnapshotError<ExampleNodeId>>,
     > {
         self.owner
-            .send_rpc(self.target, self.target_node.as_ref(), "raft-snapshot", req)
+            .send_rpc(self.target, self.target_node.as_ref(), "raft/snapshot", req)
             .await
     }
 
@@ -100,7 +100,7 @@ impl RaftNetwork<ExampleTypeConfig> for ExampleNetworkConnection {
     ) -> Result<VoteResponse<ExampleNodeId>, RPCError<ExampleNodeId, VoteError<ExampleNodeId>>>
     {
         self.owner
-            .send_rpc(self.target, self.target_node.as_ref(), "raft-vote", req)
+            .send_rpc(self.target, self.target_node.as_ref(), "raft/vote", req)
             .await
     }
 }

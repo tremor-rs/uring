@@ -6,10 +6,11 @@ use tide::{Body, Request, Response, StatusCode};
 // --- Cluster management
 
 pub fn rest(app: &mut Server) {
-    app.at("/add-learner").post(add_learner);
-    app.at("/change-membership").post(change_membership);
-    app.at("/init").post(init);
-    app.at("/metrics").get(metrics);
+    let mut cluster = app.at("/cluster");
+    cluster.at("/add-learner").post(add_learner);
+    cluster.at("/change-membership").post(change_membership);
+    cluster.at("/init").post(init);
+    cluster.at("/metrics").get(metrics);
 }
 
 /// Add a node as **Learner**.
