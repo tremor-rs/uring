@@ -48,14 +48,14 @@ impl ExampleClient {
         ClientWriteResponse<ExampleTypeConfig>,
         RPCError<ExampleNodeId, ClientWriteError<ExampleNodeId>>,
     > {
-        self.send_rpc_to_leader("write", Some(req)).await
+        self.send_rpc_to_leader("api/write", Some(req)).await
     }
 
     /// Read value by key, in an inconsistent mode.
     ///
     /// This method may return stale value because it does not force to read on a legal leader.
     pub async fn read(&self, req: &String) -> Result<String, RPCError<ExampleNodeId, Infallible>> {
-        self.do_send_rpc_to_leader("read", Some(req)).await
+        self.do_send_rpc_to_leader("api/read", Some(req)).await
     }
 
     /// Consistent Read value by key, in an inconsistent mode.
@@ -65,7 +65,7 @@ impl ExampleClient {
         &self,
         req: &String,
     ) -> Result<String, RPCError<ExampleNodeId, CheckIsLeaderError<ExampleNodeId>>> {
-        self.do_send_rpc_to_leader("consistent_read", Some(req))
+        self.do_send_rpc_to_leader("api/consistent_read", Some(req))
             .await
     }
 
@@ -80,7 +80,8 @@ impl ExampleClient {
     pub async fn init(
         &self,
     ) -> Result<(), RPCError<ExampleNodeId, InitializeError<ExampleNodeId>>> {
-        self.do_send_rpc_to_leader("init", Some(&Empty {})).await
+        self.do_send_rpc_to_leader("cluster/init", Some(&Empty {}))
+            .await
     }
 
     /// Add a node as learner.
@@ -88,12 +89,13 @@ impl ExampleClient {
     /// The node to add has to exist, i.e., being added with `write(ExampleRequest::AddNode{})`
     pub async fn add_learner(
         &self,
-        req: (ExampleNodeId, String),
+        req: (ExampleNodeId, String, String),
     ) -> Result<
         AddLearnerResponse<ExampleNodeId>,
         RPCError<ExampleNodeId, AddLearnerError<ExampleNodeId>>,
     > {
-        self.send_rpc_to_leader("add-learner", Some(&req)).await
+        self.send_rpc_to_leader("cluster/add-learner", Some(&req))
+            .await
     }
 
     /// Change membership to the specified set of nodes.
@@ -107,7 +109,7 @@ impl ExampleClient {
         ClientWriteResponse<ExampleTypeConfig>,
         RPCError<ExampleNodeId, ClientWriteError<ExampleNodeId>>,
     > {
-        self.send_rpc_to_leader("change-membership", Some(req))
+        self.send_rpc_to_leader("cluster/change-membership", Some(req))
             .await
     }
 
@@ -119,7 +121,8 @@ impl ExampleClient {
     pub async fn metrics(
         &self,
     ) -> Result<RaftMetrics<ExampleTypeConfig>, RPCError<ExampleNodeId, Infallible>> {
-        self.do_send_rpc_to_leader("metrics", None::<&()>).await
+        self.do_send_rpc_to_leader("cluster/metrics", None::<&()>)
+            .await
     }
 
     // --- Internal methods
@@ -217,7 +220,8 @@ impl ExampleClient {
                     // Update target to the new leader.
                     {
                         let mut t = self.leader.lock().unwrap();
-                        *t = (leader_id, leader_node.addr);
+                        let api_addr = leader_node.data.get("api_addr").unwrap().clone();
+                        *t = (leader_id, api_addr);
                     }
 
                     n_retry -= 1;

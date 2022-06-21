@@ -19,17 +19,17 @@ pub fn rest(app: &mut Server) {
 /// This should be done before adding a node as a member into the cluster
 /// (by calling `change-membership`)
 async fn add_learner(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
-    let body: (ExampleNodeId, String) = req.body_json().await?;
-    let node_id = body.0;
-    let node = Node {
-        addr: body.1.clone(),
-        ..Default::default()
-    };
+    let (node_id, api_addr, addr): (ExampleNodeId, String, String) = req.body_json().await?;
+    let mut data = BTreeMap::new();
+    data.insert("api_addr".into(), api_addr);
+    let node = Node { addr, data };
+    dbg!(&node);
     let res = req
         .state()
         .raft
         .add_learner(node_id, Some(node), true)
         .await;
+    dbg!();
     Ok(Response::builder(StatusCode::Ok)
         .body(Body::from_json(&res)?)
         .build())
@@ -47,13 +47,10 @@ async fn change_membership(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
 /// Initialize a single-node cluster.
 async fn init(req: Request<Arc<ExampleApp>>) -> tide::Result {
     let mut nodes = BTreeMap::new();
-    nodes.insert(
-        req.state().id,
-        Node {
-            addr: req.state().addr.clone(),
-            data: Default::default(),
-        },
-    );
+    let mut data = BTreeMap::new();
+    data.insert("api_addr".into(), req.state().api_addr.clone());
+    let addr = req.state().rcp_addr.clone();
+    nodes.insert(req.state().id, Node { addr, data });
     let res = req.state().raft.initialize(nodes).await;
     Ok(Response::builder(StatusCode::Ok)
         .body(Body::from_json(&res)?)

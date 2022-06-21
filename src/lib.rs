@@ -1,8 +1,9 @@
 use crate::{
     app::ExampleApp,
-    network::{api, management, raft, raft_network_impl::ExampleNetwork},
+    network::{api, management, raft_network_impl::ExampleNetwork},
     store::{ExampleRequest, ExampleResponse, ExampleStore},
 };
+use async_std::{net::TcpListener, task};
 use openraft::{Config, Raft};
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ type Server = tide::Server<Arc<ExampleApp>>;
 pub async fn start_example_raft_node(
     node_id: ExampleNodeId,
     http_addr: String,
+    rcp_addr: String,
 ) -> std::io::Result<()> {
     // Create a configuration for the raft instance.
     let config = Arc::new(Config::default().validate().unwrap());
@@ -37,19 +39,32 @@ pub async fn start_example_raft_node(
     // Create a local raft instance.
     let raft = Raft::new(node_id, config.clone(), network, store.clone());
 
-    // Create an application that will store all the instances created above, this will
-    // be later used on the actix-web services.
-    let mut app: Server = tide::Server::with_state(Arc::new(ExampleApp {
+    let app = Arc::new(ExampleApp {
         id: node_id,
-        addr: http_addr.clone(),
+        api_addr: http_addr.clone(),
+        rcp_addr: rcp_addr.clone(),
         raft,
         store,
         config,
-    }));
+    });
 
-    raft::rest(&mut app);
+    let echo_service = Arc::new(crate::network::raft::Raft::new(app.clone()));
+
+    let server = toy_rpc::Server::builder().register(echo_service).build();
+
+    let listener = TcpListener::bind(rcp_addr).await.unwrap();
+    let handle = task::spawn(async move {
+        server.accept_websocket(listener).await.unwrap();
+    });
+
+    // Create an application that will store all the instances created above, this will
+    // be later used on the actix-web services.
+    let mut app: Server = tide::Server::with_state(app);
+
     management::rest(&mut app);
     api::rest(&mut app);
 
-    app.listen(http_addr).await
+    app.listen(http_addr).await?;
+    handle.await;
+    Ok(())
 }

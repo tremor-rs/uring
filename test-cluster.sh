@@ -5,14 +5,14 @@ set -o errexit
 cargo build
 
 kill() {
+    SERVICE='uring3'
     if [ "$(uname)" = "Darwin" ]; then
-        SERVICE='raft-key-value'
         if pgrep -xq -- "${SERVICE}"; then
             pkill -f "${SERVICE}"
         fi
     else
         set +e # killall will error if finds no process to kill
-        killall raft-key-value
+        killall "${SERVICE}"
         set -e
     fi
 }
@@ -52,15 +52,15 @@ sleep 1
 
 echo "Start 3 uninitialized uring3 servers..."
 
-nohup ${bin} --id 1 --http-addr 127.0.0.1:21001 > n1.log &
+nohup ${bin} --id 1 --http-addr 127.0.0.1:21001 --rpc-addr 127.0.0.1:22001 > n1.log &
 sleep 1
 echo "Server 1 started"
 
-nohup ${bin} --id 2 --http-addr 127.0.0.1:21002 > n2.log &
+nohup ${bin} --id 2 --http-addr 127.0.0.1:21002 --rpc-addr 127.0.0.1:22002 > n2.log &
 sleep 1
 echo "Server 2 started"
 
-nohup ${bin} --id 3 --http-addr 127.0.0.1:21003 > n3.log &
+nohup ${bin} --id 3 --http-addr 127.0.0.1:21003 --rpc-addr 127.0.0.1:22003 > n3.log &
 sleep 1
 echo "Server 3 started"
 sleep 1
@@ -85,11 +85,11 @@ echo "Adding node 2 and node 3 as learners, to receive log from leader node 1"
 
 sleep 1
 echo
-rpc 21001/cluster/add-learner       '[2, "127.0.0.1:21002"]'
+rpc 21001/cluster/add-learner       '[2, "127.0.0.1:21002", "127.0.0.1:22002"]'
 echo "Node 2 added as leaner"
 sleep 1
 echo
-rpc 21001/cluster/add-learner       '[3, "127.0.0.1:21003"]'
+rpc 21001/cluster/add-learner       '[3, "127.0.0.1:21003", "127.0.0.1:22003"]'
 echo "Node 3 added as leaner"
 sleep 1
 

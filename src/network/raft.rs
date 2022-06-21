@@ -1,35 +1,50 @@
-use crate::{app::ExampleApp, Server};
+use crate::{app::ExampleApp, ExampleTypeConfig};
+use openraft::raft::{
+    AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse,
+    VoteRequest, VoteResponse,
+};
 use std::sync::Arc;
-use tide::{Body, Request, Response, StatusCode};
+use toy_rpc::macros::export_impl;
 
 // --- Raft communication
 
-pub fn rest(app: &mut Server) {
-    let mut raft = app.at("/raft");
-    raft.at("/vote").post(vote);
-    raft.at("/append").post(append);
-    raft.at("/snapshot").post(snapshot);
-}
-async fn vote(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
-    let body = req.body_json().await?;
-    let res = req.state().raft.vote(body).await;
-    Ok(Response::builder(StatusCode::Ok)
-        .body(Body::from_json(&res)?)
-        .build())
+pub struct Raft {
+    app: Arc<ExampleApp>,
 }
 
-async fn append(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
-    let body = req.body_json().await?;
-    let res = req.state().raft.append_entries(body).await;
-    Ok(Response::builder(StatusCode::Ok)
-        .body(Body::from_json(&res)?)
-        .build())
-}
-
-async fn snapshot(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
-    let body = req.body_json().await?;
-    let res = req.state().raft.install_snapshot(body).await;
-    Ok(Response::builder(StatusCode::Ok)
-        .body(Body::from_json(&res)?)
-        .build())
+#[export_impl]
+impl Raft {
+    pub fn new(app: Arc<ExampleApp>) -> Self {
+        Self { app }
+    }
+    #[export_method]
+    pub async fn vote(&self, vote: VoteRequest<u64>) -> Result<VoteResponse<u64>, toy_rpc::Error> {
+        self.app
+            .raft
+            .vote(vote)
+            .await
+            .map_err(|e| toy_rpc::Error::Internal(Box::new(e)))
+    }
+    #[export_method]
+    pub async fn append(
+        &self,
+        req: AppendEntriesRequest<ExampleTypeConfig>,
+    ) -> Result<AppendEntriesResponse<u64>, toy_rpc::Error> {
+        self.app
+            .raft
+            .append_entries(req)
+            .await
+            .map_err(|e| toy_rpc::Error::Internal(Box::new(e)))
+    }
+    #[export_method]
+    pub async fn snapshot(
+        &self,
+        req: InstallSnapshotRequest<ExampleTypeConfig>,
+    ) -> Result<InstallSnapshotResponse<u64>, toy_rpc::Error> {
+        self.app
+            .raft
+            .install_snapshot(req)
+            .await
+            .map_err(|e| toy_rpc::Error::Internal(Box::new(e)))
+    }
 }

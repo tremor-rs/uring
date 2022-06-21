@@ -8,7 +8,8 @@ use crate::{ExampleNodeId, ExampleRaft, ExampleStore};
 // instances of raft, store and more.
 pub struct ExampleApp {
     pub id: ExampleNodeId,
-    pub addr: String,
+    pub api_addr: String,
+    pub rcp_addr: String,
     pub raft: ExampleRaft,
     pub store: Arc<ExampleStore>,
     pub config: Arc<Config>,
