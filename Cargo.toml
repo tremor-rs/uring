@@ -19,8 +19,9 @@ name = "uring3"
 path = "src/bin/main.rs"
 
 [dependencies]
+rocksdb = "0.18.0"
 tide = { version = "0.16" }
-async-std = { version = "*", features = ["attributes", "tokio1"] }
+async-std = { version = "1.12.0", features = ["attributes", "tokio1"] }
 async-trait = "0.1.36"
 clap = { version = "3.0.13", features = ["derive", "env"] }
 tracing-subscriber = "0.3.0"

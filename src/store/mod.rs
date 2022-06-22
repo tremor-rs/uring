@@ -1,34 +1,21 @@
-use std::collections::BTreeMap;
-use std::fmt::Debug;
-use std::io::Cursor;
-use std::ops::RangeBounds;
-use std::sync::Arc;
-use std::sync::Mutex;
-
+use crate::{ExampleNodeId, ExampleTypeConfig};
 use async_std::sync::RwLock;
-use openraft::async_trait::async_trait;
-use openraft::storage::LogState;
-use openraft::storage::Snapshot;
-use openraft::AnyError;
-use openraft::EffectiveMembership;
-use openraft::Entry;
-use openraft::EntryPayload;
-use openraft::ErrorSubject;
-use openraft::ErrorVerb;
-use openraft::LogId;
-use openraft::RaftLogReader;
-use openraft::RaftSnapshotBuilder;
-use openraft::RaftStorage;
-use openraft::SnapshotMeta;
-use openraft::StateMachineChanges;
-use openraft::StorageError;
-use openraft::StorageIOError;
-use openraft::Vote;
-use serde::Deserialize;
-use serde::Serialize;
-
-use crate::ExampleNodeId;
-use crate::ExampleTypeConfig;
+use openraft::{
+    async_trait::async_trait,
+    storage::{LogState, Snapshot},
+    AnyError, EffectiveMembership, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId,
+    RaftLogReader, RaftSnapshotBuilder, RaftStorage, SnapshotMeta, StateMachineChanges,
+    StorageError, StorageIOError, Vote,
+};
+use rocksdb::{ColumnFamilyDescriptor, Options, DB};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    fmt::Debug,
+    io::Cursor,
+    ops::RangeBounds,
+    sync::{Arc, Mutex},
+};
 
 /**
  * Here you will set the types of request that will interact with the raft nodes.
@@ -54,7 +41,7 @@ pub struct ExampleResponse {
     pub value: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ExampleSnapshot {
     pub meta: SnapshotMeta<ExampleNodeId>,
 
@@ -79,18 +66,15 @@ pub struct ExampleStateMachine {
     pub data: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ExampleStore {
-    last_purged_log_id: RwLock<Option<LogId<ExampleNodeId>>>,
+    db: rocksdb::DB,
 
     /// The Raft log.
     log: RwLock<BTreeMap<u64, Entry<ExampleTypeConfig>>>,
 
     /// The Raft state machine.
     pub state_machine: RwLock<ExampleStateMachine>,
-
-    /// The current granted vote.
-    vote: RwLock<Option<Vote<ExampleNodeId>>>,
 
     snapshot_idx: Arc<Mutex<u64>>,
 
@@ -105,7 +89,11 @@ impl RaftLogReader<ExampleTypeConfig> for Arc<ExampleStore> {
         let log = self.log.read().await;
         let last = log.iter().rev().next().map(|(_, ent)| ent.log_id);
 
-        let last_purged = *self.last_purged_log_id.read().await;
+        let last_purged = self
+            .db
+            .get_cf(self.db.cf_handle("store").unwrap(), b"last_purged_log_id")
+            .unwrap()
+            .and_then(|v| serde_json::from_slice(&v).ok());
 
         let last = match last {
             None => last_purged,
@@ -208,15 +196,25 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
         &mut self,
         vote: &Vote<ExampleNodeId>,
     ) -> Result<(), StorageError<ExampleNodeId>> {
-        let mut v = self.vote.write().await;
-        *v = Some(*vote);
+        self.db
+            .put_cf(
+                self.db.cf_handle("store").unwrap(),
+                b"vote",
+                serde_json::to_vec(vote).unwrap(),
+            )
+            .unwrap();
         Ok(())
     }
 
     async fn read_vote(
         &mut self,
     ) -> Result<Option<Vote<ExampleNodeId>>, StorageError<ExampleNodeId>> {
-        Ok(*self.vote.read().await)
+        let vote = self
+            .db
+            .get_cf(self.db.cf_handle("store").unwrap(), b"vote")
+            .unwrap()
+            .and_then(|v| serde_json::from_slice(&v).ok());
+        Ok(vote)
     }
 
     #[tracing::instrument(level = "trace", skip(self, entries))]
@@ -258,9 +256,14 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
         tracing::debug!("delete_log: [{:?}, +oo)", log_id);
 
         {
-            let mut ld = self.last_purged_log_id.write().await;
-            assert!(*ld <= Some(log_id));
-            *ld = Some(log_id);
+            self.db
+                .put_cf(
+                    self.db.cf_handle("store").unwrap(),
+                    b"last_purged_log_id",
+                    serde_json::to_vec(&log_id).unwrap(),
+                )
+                .unwrap();
+            // assert!(*ld <= Some(log_id));
         }
 
         {
@@ -396,5 +399,55 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         self.clone()
+    }
+}
+impl ExampleStore {
+    pub(crate) fn new(rcp_addr: &str) -> ExampleStore {
+        let mut db_opts = Options::default();
+        db_opts.create_missing_column_families(true);
+        db_opts.create_if_missing(true);
+        let db_path = format!("{rcp_addr}.db");
+
+        let store = ColumnFamilyDescriptor::new("store", Options::default());
+        let state_machine = ColumnFamilyDescriptor::new("state_machine", Options::default());
+        let data = ColumnFamilyDescriptor::new("data", Options::default());
+
+        let db =
+            DB::open_cf_descriptors(&db_opts, db_path, vec![store, state_machine, data]).unwrap();
+
+        let current_snapshot = db
+            .get_cf(db.cf_handle("store").unwrap(), b"current_snapshot")
+            .unwrap()
+            .and_then(|v| serde_json::from_slice(&v).ok());
+        let snapshot_idx = db
+            .get_cf(db.cf_handle("store").unwrap(), b"snapshot_idx")
+            .unwrap()
+            .and_then(|v| serde_json::from_slice(&v).ok())
+            .unwrap_or_default();
+
+        let last_applied_log = db
+            .get_cf(db.cf_handle("state_machine").unwrap(), b"last_applied_log")
+            .unwrap()
+            .and_then(|v| serde_json::from_slice(&v).ok());
+
+        let last_membership = db
+            .get_cf(db.cf_handle("state_machine").unwrap(), b"last_membership")
+            .unwrap()
+            .and_then(|v| serde_json::from_slice(&v).ok())
+            .unwrap_or_default();
+
+        let state_machine = ExampleStateMachine {
+            last_applied_log,
+            last_membership,
+            data: Default::default(),
+        };
+
+        ExampleStore {
+            db,
+            log: Default::default(),
+            state_machine: RwLock::new(state_machine),
+            snapshot_idx: Arc::new(Mutex::new(snapshot_idx)),
+            current_snapshot: RwLock::new(current_snapshot),
+        }
     }
 }
