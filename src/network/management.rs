@@ -23,13 +23,11 @@ async fn add_learner(mut req: Request<Arc<ExampleApp>>) -> tide::Result {
     let mut data = BTreeMap::new();
     data.insert("api_addr".into(), api_addr);
     let node = Node { addr, data };
-    dbg!(&node);
     let res = req
         .state()
         .raft
         .add_learner(node_id, Some(node), true)
         .await;
-    dbg!();
     Ok(Response::builder(StatusCode::Ok)
         .body(Body::from_json(&res)?)
         .build())

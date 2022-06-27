@@ -39,9 +39,11 @@ toy-rpc = { version = "*", features = [
   "client",
   "async_std_runtime",
 ] }
+byteorder = "1.4.3"
 
 [dev-dependencies]
 maplit = "1.0.2"
+tempdir = "0.3.0"
 
 [features]
 docinclude = [] # Used only for activating `doc(include="...")` on nightly.

@@ -37,22 +37,28 @@ async fn test_cluster() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- Start 3 raft node in 3 threads.
+    let d1 = tempdir::TempDir::new("test_cluster")?;
+    let d2 = tempdir::TempDir::new("test_cluster")?;
+    let d3 = tempdir::TempDir::new("test_cluster")?;
 
     let _h1 = thread::spawn(|| {
-        let x =
-            block_on(async move { start_example_raft_node(1, get_addr(1), get_rpc_addr(1)).await });
+        let x = block_on(async move {
+            start_example_raft_node(1, d1.path(), get_addr(1), get_rpc_addr(1)).await
+        });
         println!("x: {:?}", x);
     });
 
     let _h2 = thread::spawn(|| {
-        let x =
-            block_on(async move { start_example_raft_node(2, get_addr(2), get_rpc_addr(2)).await });
+        let x = block_on(async move {
+            start_example_raft_node(2, d2.path(), get_addr(2), get_rpc_addr(2)).await
+        });
         println!("x: {:?}", x);
     });
 
     let _h3 = thread::spawn(|| {
-        let x =
-            block_on(async move { start_example_raft_node(3, get_addr(3), get_rpc_addr(3)).await });
+        let x = block_on(async move {
+            start_example_raft_node(3, d3.path(), get_addr(3), get_rpc_addr(3)).await
+        });
         println!("x: {:?}", x);
     });
 
