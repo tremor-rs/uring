@@ -70,8 +70,7 @@ pub struct ExampleStore {
 
     /// The Raft state machine.
     pub state_machine: RwLock<ExampleStateMachine>,
-
-    current_snapshot: RwLock<Option<ExampleSnapshot>>,
+    // current_snapshot: RwLock<Option<ExampleSnapshot>>,
 }
 type StorageResult<T> = Result<T, StorageError<ExampleNodeId>>;
 
@@ -168,6 +167,37 @@ impl ExampleStore {
                 ),
             })?
             .and_then(|v| serde_json::from_slice(&v).ok()))
+    }
+
+    fn get_current_snapshot(&self) -> StorageResult<Option<ExampleSnapshot>> {
+        Ok(self
+            .db
+            .get_cf(self.store(), b"snapshot")
+            .map_err(|e| StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Store,
+                    ErrorVerb::Read,
+                    AnyError::new(&e),
+                ),
+            })?
+            .and_then(|v| serde_json::from_slice(&v).ok()))
+    }
+
+    fn set_current_snapshot(&self, snap: ExampleSnapshot) -> StorageResult<()> {
+        self.db
+            .put_cf(
+                self.store(),
+                b"snapshot",
+                serde_json::to_vec(&snap).unwrap().as_slice(),
+            )
+            .map_err(|e| StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Snapshot(snap.meta),
+                    ErrorVerb::Write,
+                    AnyError::new(&e),
+                ),
+            })?;
+        Ok(())
     }
 }
 
@@ -286,10 +316,7 @@ impl RaftSnapshotBuilder<ExampleTypeConfig, Cursor<Vec<u8>>> for Arc<ExampleStor
             data: data.clone(),
         };
 
-        {
-            let mut current_snapshot = self.current_snapshot.write().await;
-            *current_snapshot = Some(snapshot);
-        }
+        self.set_current_snapshot(snapshot)?;
 
         Ok(Snapshot {
             meta,
@@ -458,9 +485,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
             *state_machine = updated_state_machine;
         }
 
-        // Update current snapshot.
-        let mut current_snapshot = self.current_snapshot.write().await;
-        *current_snapshot = Some(new_snapshot);
+        self.set_current_snapshot(new_snapshot)?;
         Ok(StateMachineChanges {
             last_applied: meta.last_log_id,
             is_snapshot: true,
@@ -472,7 +497,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
         &mut self,
     ) -> Result<Option<Snapshot<ExampleNodeId, Self::SnapshotData>>, StorageError<ExampleNodeId>>
     {
-        match &*self.current_snapshot.read().await {
+        match ExampleStore::get_current_snapshot(self)? {
             Some(snapshot) => {
                 let data = snapshot.data.clone();
                 Ok(Some(Snapshot {
@@ -523,15 +548,9 @@ impl ExampleStore {
             data: Default::default(),
         };
 
-        let current_snapshot = db
-            .get_cf(db.cf_handle("store").unwrap(), b"current_snapshot")
-            .unwrap()
-            .and_then(|v| serde_json::from_slice(&v).ok());
-
         ExampleStore {
             db,
             state_machine: RwLock::new(state_machine),
-            current_snapshot: RwLock::new(current_snapshot),
         }
     }
 }
