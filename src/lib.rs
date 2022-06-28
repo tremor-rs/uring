@@ -34,7 +34,7 @@ where
     let config = Arc::new(Config::default().validate().unwrap());
 
     // Create a instance of where the Raft data will be stored.
-    let store = Arc::new(ExampleStore::new(&dir));
+    let store = ExampleStore::new(&dir).await;
 
     // Create the network layer that will connect and communicate the raft instances and
     // will be used in conjunction with the store created above.

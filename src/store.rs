@@ -65,12 +65,8 @@ pub struct ExampleStateMachine {
 pub struct ExampleStore {
     db: rocksdb::DB,
 
-    /// The Raft log.
-    // log: RwLock<BTreeMap<u64, Entry<ExampleTypeConfig>>>,
-
     /// The Raft state machine.
     pub state_machine: RwLock<ExampleStateMachine>,
-    // current_snapshot: RwLock<Option<ExampleSnapshot>>,
 }
 type StorageResult<T> = Result<T, StorageError<ExampleNodeId>>;
 
@@ -93,7 +89,7 @@ impl ExampleStore {
     fn logs(&self) -> &ColumnFamily {
         self.db.cf_handle("logs").unwrap()
     }
-    fn get_last_purged(&self) -> StorageResult<Option<LogId<u64>>> {
+    fn get_last_purged_(&self) -> StorageResult<Option<LogId<u64>>> {
         Ok(self
             .db
             .get_cf(self.store(), b"last_purged_log_id")
@@ -103,7 +99,7 @@ impl ExampleStore {
             .and_then(|v| serde_json::from_slice(&v).ok()))
     }
 
-    fn set_last_purged(&self, log_id: LogId<u64>) -> StorageResult<()> {
+    fn set_last_purged_(&self, log_id: LogId<u64>) -> StorageResult<()> {
         self.db
             .put_cf(
                 self.store(),
@@ -115,7 +111,7 @@ impl ExampleStore {
             })
     }
 
-    fn get_snapshot_index(&self) -> StorageResult<u64> {
+    fn get_snapshot_index_(&self) -> StorageResult<u64> {
         Ok(self
             .db
             .get_cf(self.store(), b"snapshot_index")
@@ -126,7 +122,7 @@ impl ExampleStore {
             .unwrap_or(0))
     }
 
-    fn set_snapshot_indesx(&self, snapshot_index: u64) -> StorageResult<()> {
+    fn set_snapshot_indesx_(&self, snapshot_index: u64) -> StorageResult<()> {
         self.db
             .put_cf(
                 self.store(),
@@ -143,7 +139,7 @@ impl ExampleStore {
         Ok(())
     }
 
-    fn set_vote(&self, vote: &Vote<ExampleNodeId>) -> StorageResult<()> {
+    fn set_vote_(&self, vote: &Vote<ExampleNodeId>) -> StorageResult<()> {
         self.db
             .put_cf(self.store(), b"vote", serde_json::to_vec(vote).unwrap())
             .map_err(|e| StorageError::IO {
@@ -155,7 +151,7 @@ impl ExampleStore {
             })
     }
 
-    fn get_vote(&self) -> StorageResult<Option<Vote<ExampleNodeId>>> {
+    fn get_vote_(&self) -> StorageResult<Option<Vote<ExampleNodeId>>> {
         Ok(self
             .db
             .get_cf(self.store(), b"vote")
@@ -169,7 +165,7 @@ impl ExampleStore {
             .and_then(|v| serde_json::from_slice(&v).ok()))
     }
 
-    fn get_current_snapshot(&self) -> StorageResult<Option<ExampleSnapshot>> {
+    fn get_current_snapshot_(&self) -> StorageResult<Option<ExampleSnapshot>> {
         Ok(self
             .db
             .get_cf(self.store(), b"snapshot")
@@ -183,7 +179,7 @@ impl ExampleStore {
             .and_then(|v| serde_json::from_slice(&v).ok()))
     }
 
-    fn set_current_snapshot(&self, snap: ExampleSnapshot) -> StorageResult<()> {
+    fn set_current_snapshot_(&self, snap: ExampleSnapshot) -> StorageResult<()> {
         self.db
             .put_cf(
                 self.store(),
@@ -216,7 +212,7 @@ impl RaftLogReader<ExampleTypeConfig> for Arc<ExampleStore> {
                 )
             });
 
-        let last_purged_log_id = self.get_last_purged()?;
+        let last_purged_log_id = self.get_last_purged_()?;
 
         let last_log_id = match last {
             None => last_purged_log_id,
@@ -297,8 +293,8 @@ impl RaftSnapshotBuilder<ExampleTypeConfig, Cursor<Vec<u8>>> for Arc<ExampleStor
         };
 
         // FIXME: we probably want thius to be atomic.
-        let snapshot_idx: u64 = self.get_snapshot_index()? + 1;
-        self.set_snapshot_indesx(snapshot_idx)?;
+        let snapshot_idx: u64 = self.get_snapshot_index_()? + 1;
+        self.set_snapshot_indesx_(snapshot_idx)?;
 
         let snapshot_id = format!(
             "{}-{}-{}",
@@ -316,7 +312,7 @@ impl RaftSnapshotBuilder<ExampleTypeConfig, Cursor<Vec<u8>>> for Arc<ExampleStor
             data: data.clone(),
         };
 
-        self.set_current_snapshot(snapshot)?;
+        self.set_current_snapshot_(snapshot)?;
 
         Ok(Snapshot {
             meta,
@@ -336,13 +332,13 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
         &mut self,
         vote: &Vote<ExampleNodeId>,
     ) -> Result<(), StorageError<ExampleNodeId>> {
-        self.set_vote(vote)
+        self.set_vote_(vote)
     }
 
     async fn read_vote(
         &mut self,
     ) -> Result<Option<Vote<ExampleNodeId>>, StorageError<ExampleNodeId>> {
-        self.get_vote()
+        self.get_vote_()
     }
 
     #[tracing::instrument(level = "trace", skip(self, entries))]
@@ -389,7 +385,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     ) -> Result<(), StorageError<ExampleNodeId>> {
         tracing::debug!("delete_log: [0, {:?}]", log_id);
 
-        self.set_last_purged(log_id)?;
+        self.set_last_purged_(log_id)?;
         let from = id_to_bin(0);
         let to = id_to_bin(log_id.index);
         self.db
@@ -485,7 +481,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
             *state_machine = updated_state_machine;
         }
 
-        self.set_current_snapshot(new_snapshot)?;
+        self.set_current_snapshot_(new_snapshot)?;
         Ok(StateMachineChanges {
             last_applied: meta.last_log_id,
             is_snapshot: true,
@@ -497,7 +493,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
         &mut self,
     ) -> Result<Option<Snapshot<ExampleNodeId, Self::SnapshotData>>, StorageError<ExampleNodeId>>
     {
-        match ExampleStore::get_current_snapshot(self)? {
+        match ExampleStore::get_current_snapshot_(self)? {
             Some(snapshot) => {
                 let data = snapshot.data.clone();
                 Ok(Some(Snapshot {
@@ -518,7 +514,7 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     }
 }
 impl ExampleStore {
-    pub(crate) fn new<P: AsRef<Path>>(db_path: P) -> ExampleStore {
+    pub(crate) async fn new<P: AsRef<Path>>(db_path: P) -> Arc<ExampleStore> {
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
@@ -531,26 +527,26 @@ impl ExampleStore {
         let db = DB::open_cf_descriptors(&db_opts, db_path, vec![store, state_machine, data, logs])
             .unwrap();
 
-        let last_applied_log = db
-            .get_cf(db.cf_handle("state_machine").unwrap(), b"last_applied_log")
-            .unwrap()
-            .and_then(|v| serde_json::from_slice(&v).ok());
+        let mut store = Arc::new(ExampleStore {
+            db,
+            state_machine: RwLock::new(ExampleStateMachine::default()),
+        });
 
-        let last_membership = db
-            .get_cf(db.cf_handle("state_machine").unwrap(), b"last_membership")
-            .unwrap()
-            .and_then(|v| serde_json::from_slice(&v).ok())
-            .unwrap_or_default();
+        if let Some(snapshot) = store.get_current_snapshot_().unwrap() {
+            let updated_state_machine: ExampleStateMachine =
+                serde_json::from_slice(&snapshot.data).unwrap();
+            store.state_machine.write().await.last_applied_log =
+                updated_state_machine.last_applied_log;
+            store.state_machine.write().await.last_membership =
+                updated_state_machine.last_membership;
 
-        let state_machine = ExampleStateMachine {
-            last_applied_log,
-            last_membership,
-            data: Default::default(),
+            let last_log = snapshot.meta.last_log_id;
+
+            for log in store.try_get_log_entries(last_log.index..).await.unwrap() {
+                store.apply_to_state_machine(&[&log]).await.unwrap();
+            }
         };
 
-        ExampleStore {
-            db,
-            state_machine: RwLock::new(state_machine),
-        }
+        store
     }
 }
