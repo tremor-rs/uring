@@ -4,12 +4,13 @@ set -o errexit
 
 cargo build
 
-kill() {
+kill_all() {
     SERVICE='uring3'
     if [ "$(uname)" = "Darwin" ]; then
         if pgrep -xq -- "${SERVICE}"; then
             pkill -f "${SERVICE}"
         fi
+        rm -r 127.0.0.1:*.db
     else
         set +e # killall will error if finds no process to kill
         killall "${SERVICE}"
@@ -44,15 +45,20 @@ rpc() {
 export RUST_LOG=debug 
 bin=./target/debug/uring3
 
-echo "Killing all running uring3"
+echo "Killing all running uring3 and cleaning up old data"
 
-kill
-
+kill_all
 sleep 1
+
+if ls 127.0.0.1:*.db
+then
+    rm -r 127.0.0.1:*.db
+fi
 
 echo "Start 3 uninitialized uring3 servers..."
 
-nohup ${bin} --id 1 --http-addr 127.0.0.1:21001 --rpc-addr 127.0.0.1:22001 > n1.log &
+${bin} --id 1 --http-addr 127.0.0.1:21001 --rpc-addr 127.0.0.1:22001 2>&1 > n1.log &
+PID1=$!
 sleep 1
 echo "Server 1 started"
 
@@ -132,10 +138,71 @@ echo "Read from node 3"
 echo
 rpc 21003/api/read  '"foo"'
 
+echo "Kill Node 1"
+kill -9 $PID1
+sleep 1
+
+echo "Read from node 3"
+echo
+rpc 21003/api/read  '"foo"'
+sleep 1
+
+
+echo "Get metrics from node 2"
+sleep 1
+echo
+rpc 21002/cluster/metrics
+sleep 1
+
+echo "Write data on node 2"
+sleep 1
+echo
+rpc 21002/api/write '{"Set":{"key":"foo","value":"badger"}}'
+sleep 1
+echo "Data written"
+sleep 1
+
+echo "Write data on node 3"
+sleep 1
+echo
+rpc 21003/api/write '{"Set":{"key":"foo","value":"badger"}}'
+sleep 1
+echo "Data written"
+sleep 1
+
+
+echo "Get metrics from node 2"
+sleep 1
+echo
+rpc 21002/cluster/metrics
+sleep 1
+
+
+echo "Read from node 3"
+echo
+rpc 21003/api/read  '"foo"'
+sleep 1
+
+
+echo "Restart node 1"
+echo
+
+${bin} --id 1 --http-addr 127.0.0.1:21001 --rpc-addr 127.0.0.1:22001 2>&1 >> n1.log &
+sleep 1
+echo "Server 1 started"
+
+echo "Read from node 1"
+echo
+rpc 21001/api/read  '"foo"'
+sleep 1
+
+
 echo "Killing all nodes in 3s..."
 sleep 1
 echo "Killing all nodes in 2s..."
 sleep 1
 echo "Killing all nodes in 1s..."
 sleep 1
-kill
+kill_all
+
+rm -r 127.0.0.1:*.db

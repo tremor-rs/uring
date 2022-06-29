@@ -206,7 +206,7 @@ impl RaftLogReader<ExampleTypeConfig> for Arc<ExampleStore> {
             .next()
             .and_then(|(_, ent)| {
                 Some(
-                    dbg!(serde_json::from_slice::<Entry<ExampleTypeConfig>>(&ent))
+                    serde_json::from_slice::<Entry<ExampleTypeConfig>>(&ent)
                         .ok()?
                         .log_id,
                 )
@@ -218,10 +218,10 @@ impl RaftLogReader<ExampleTypeConfig> for Arc<ExampleStore> {
             None => last_purged_log_id,
             Some(x) => Some(x),
         };
-        dbg!(Ok(LogState {
+        Ok(LogState {
             last_purged_log_id,
             last_log_id,
-        }))
+        })
     }
 
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send + Sync>(
@@ -233,8 +233,6 @@ impl RaftLogReader<ExampleTypeConfig> for Arc<ExampleStore> {
             std::ops::Bound::Excluded(x) => id_to_bin(*x + 1),
             std::ops::Bound::Unbounded => id_to_bin(0),
         };
-        dbg!(&range);
-        dbg!(&start);
         self.db
             .iterator_cf(
                 self.logs(),
@@ -345,12 +343,11 @@ impl RaftStorage<ExampleTypeConfig> for Arc<ExampleStore> {
     async fn append_to_log(&mut self, entries: &[&Entry<ExampleTypeConfig>]) -> StorageResult<()> {
         for entry in entries {
             let id = id_to_bin(entry.log_id.index);
-            dbg!(&id);
             assert_eq!(bin_to_id(&id), entry.log_id.index);
             self.db
                 .put_cf(
                     self.logs(),
-                    dbg!(id),
+                    id,
                     serde_json::to_vec(entry).map_err(|e| {
                         StorageIOError::new(ErrorSubject::Logs, ErrorVerb::Write, AnyError::new(&e))
                     })?,
