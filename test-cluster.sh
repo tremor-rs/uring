@@ -196,6 +196,13 @@ echo
 rpc 21001/api/read  '"foo"'
 sleep 1
 
+echo "Get metrics from node 1"
+sleep 1
+echo
+rpc 21001/cluster/metrics
+sleep 1
+
+
 
 echo "Killing all nodes in 3s..."
 sleep 1
