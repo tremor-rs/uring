@@ -17,7 +17,7 @@ gdrl = { path = "gdrl" }
 protocol-driver = { path = "protocol-driver" }
 
 raft = "0.6.0"
-rocksdb = "0.18"
+rocksdb = "0.19"
 slog = { version = "2", features = [
     "max_level_info",
     "release_max_level_warn",
